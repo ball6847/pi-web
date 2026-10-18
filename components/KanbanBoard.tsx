@@ -778,7 +778,8 @@ function LaneColumn({
   const cards = cardsOfLane(board, lane.id);
   const formHere = form?.laneId === lane.id ? form : null;
   const editing = formHere?.cardId ? cards.find((c) => c.id === formHere.cardId) ?? null : null;
-  const width = mobile ? "min(240px, 68vw)" : 250;
+  // One lane fills the phone screen in the single-lane mobile mode.
+  const width = mobile ? "100%" : 250;
 
   return (
     <section
@@ -786,7 +787,7 @@ function LaneColumn({
       style={{
         flex: "0 0 auto",
         width,
-        maxWidth: "80vw",
+        maxWidth: mobile ? "100%" : "80vw",
         maxHeight: "100%",
         display: "flex",
         flexDirection: "column",
@@ -1100,6 +1101,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const { t } = useI18n();
   const mobile = useIsMobile();
   const [configOpen, setConfigOpen] = useState(false);
+  // One lane at a time on phones: the column row is 240px-wide columns, and a
+  // half-visible neighbour reads as a broken board. A tab strip switches lanes.
+  const [mobileLaneId, setMobileLaneId] = useState<string | null>(null);
   const [formFor, setFormFor] = useState<{ laneId: string; cardId: string | null } | null>(null);
   const [menuFor, setMenuFor] = useState<{ cardId: string; anchor: DOMRect } | null>(null);
   const [linkFor, setLinkFor] = useState<{ cardId: string; anchor: DOMRect } | null>(null);
@@ -1111,6 +1115,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, []);
 
   const sessionIds = useMemo(() => new Set(sessions.map((s) => s.id)), [sessions]);
+  const activeMobileLane = useMemo(() => {
+    if (!mobile) return null;
+    if (mobileLaneId && board.lanes.some((l) => l.id === mobileLaneId)) return mobileLaneId;
+    // Arrival with a card (the strip's View board, the sidebar ring): open its lane.
+    const jump = board.cards.find((c) => c.id === highlightCardId);
+    if (jump && board.lanes.some((l) => l.id === jump.laneId)) return jump.laneId;
+    return board.lanes.find((l) => cardsOfLane(board, l.id).length > 0)?.id ?? board.lanes[0]?.id ?? null;
+  }, [mobile, mobileLaneId, board, highlightCardId]);
   const sessionOptions = useMemo(
     () => sessions.map((s) => ({ id: s.id, title: s.name || s.firstMessage || s.id, running: runningSessionIds.has(s.id) })),
     [sessions, runningSessionIds],
@@ -1270,6 +1282,40 @@ export function KanbanBoard(props: KanbanBoardProps) {
           {!mobile && t("kanban.boardConfigure")}
         </button>
       </header>
+      {mobile && activeMobileLane && (
+        <div style={{ flexShrink: 0, display: "flex", gap: 6, padding: "8px 12px 0", overflowX: "auto", scrollbarWidth: "none" }}>
+          {board.lanes.map((lane) => {
+            const count = cardsOfLane(board, lane.id).length;
+            const active = lane.id === activeMobileLane;
+            return (
+              <button
+                key={lane.id}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setMobileLaneId(lane.id)}
+                style={{
+                  flexShrink: 0,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  height: 26,
+                  padding: "0 10px",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  borderRadius: 999,
+                  border: `1px solid ${active ? "color-mix(in srgb, var(--accent) 45%, transparent)" : "var(--border)"}`,
+                  background: active ? "color-mix(in srgb, var(--accent) 14%, transparent)" : "none",
+                  color: active ? "var(--text)" : "var(--text-muted)",
+                  cursor: "pointer",
+                }}
+              >
+                {lane.name}
+                {count > 0 && <span style={{ fontSize: 10, color: active ? "var(--accent)" : "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{count}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
       <div
         style={{
           flex: 1,
@@ -1279,16 +1325,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
           display: "flex",
           alignItems: "stretch",
           gap: 10,
-          padding: 12,
+          padding: "12px 12px 12px",
         }}
       >
-        {board.lanes.map((lane, index) => (
+        {board.lanes.filter((lane) => !mobile || lane.id === activeMobileLane).map((lane) => {
+          const laneIndex = board.lanes.findIndex((l) => l.id === lane.id);
+          return (
           <LaneColumn
             key={lane.id}
             board={board}
             projectDir={projectDir}
             lane={lane}
-            isLast={index === board.lanes.length - 1}
+            isLast={laneIndex === board.lanes.length - 1}
             sessions={sessions}
             runningIds={runningSessionIds}
             sessionIds={sessionIds}
@@ -1300,25 +1348,28 @@ export function KanbanBoard(props: KanbanBoardProps) {
             onOpenSession={onOpenSession}
             mobile={mobile}
           />
-        ))}
-        <button
-          type="button"
-          onClick={() => setConfigOpen(true)}
-          style={{
-            flex: "0 0 auto",
-            width: mobile ? "min(120px, 34vw)" : 150,
-            maxHeight: "100%",
-            padding: 12,
-            background: "none",
-            border: "1px dashed var(--border)",
-            borderRadius: 10,
-            color: "var(--text-dim)",
-            fontSize: 11.5,
-            cursor: "pointer",
-          }}
-        >
-          {t("kanban.laneAddGhost")}
-        </button>
+          );
+        })}
+        {!(mobile && activeMobileLane) && (
+          <button
+            type="button"
+            onClick={() => setConfigOpen(true)}
+            style={{
+              flex: "0 0 auto",
+              width: mobile ? "min(120px, 34vw)" : 150,
+              maxHeight: "100%",
+              padding: 12,
+              background: "none",
+              border: "1px dashed var(--border)",
+              borderRadius: 10,
+              color: "var(--text-dim)",
+              fontSize: 11.5,
+              cursor: "pointer",
+            }}
+          >
+            {t("kanban.laneAddGhost")}
+          </button>
+        )}
       </div>
       {configOpen && <LaneConfig board={board} projectDir={projectDir} projectName={projectName} onClose={() => setConfigOpen(false)} />}
       {menuFor && menuCard && (
