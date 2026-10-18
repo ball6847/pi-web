@@ -29,6 +29,7 @@ import {
   type SidebarRow,
 } from "@/lib/session-tree";
 import type { SessionInfo } from "@/lib/types";
+import type { KanbanSessionInfo } from "@/lib/kanban-mock";
 import { isPlainActivation, sessionDeepLink } from "@/lib/session-links";
 import { formatRelativeTime, formatShortRelativeTime } from "@/lib/i18n/format";
 import { skillExpansionToCommand } from "@/lib/slash-display";
@@ -134,6 +135,14 @@ export interface SessionTreeProps {
   onArchiveGroupMenu?(project: SidebarProject, opener: HTMLElement): void;
   onOpenOtherProject(opener: HTMLElement): void;
   onOpenArchive(): void;
+  /**
+   * Kanban (mock, UI design phase): the board icon a project group header
+   * carries, and the marker sessions that have a board card carry.
+   */
+  kanban?: {
+    onOpenBoard(projectRoot: string): void;
+    sessionIndex: Map<string, KanbanSessionInfo>;
+  } | null;
   /** Scroll a row into view (and maybe focus it); see SessionTreeReveal. */
   reveal?: SessionTreeReveal | null;
   /** The reveal request with this id was scrolled to or dropped: the parent lets go of it. */
@@ -439,6 +448,7 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
                     confirming={row.family.root.id === confirmDeleteRootId}
                     menuOpen={menuOpen}
                     handlers={handlersRef}
+                    kanbanStatus={handlersRef.current.kanban?.sessionIndex.get(row.family.root.id) ?? null}
                   />
                 );
               }
@@ -460,6 +470,7 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
                     dragPhase={dragView?.projectKey === row.project.key ? dragView.phase : null}
                     drag={groupDrag.handlers}
                     handlers={handlersRef}
+                    hasKanban={handlersRef.current.kanban !== null}
                   />
                 );
               }
@@ -501,6 +512,7 @@ const SessionRowView = memo(function SessionRowView({
   confirming,
   menuOpen,
   handlers,
+  kanbanStatus,
 }: {
   row: SessionRow;
   layout: SidebarLayout;
@@ -511,6 +523,7 @@ const SessionRowView = memo(function SessionRowView({
   confirming: boolean;
   menuOpen: boolean;
   handlers: Handlers;
+  kanbanStatus: KanbanSessionInfo | null;
 }) {
   const { locale, t } = useI18n();
   const { family, context, status } = row;
@@ -626,6 +639,18 @@ const SessionRowView = memo(function SessionRowView({
         <span className="session-tree-branch">
           <BranchIcon size={10} className="session-tree-branch-icon" />
           {branch}
+        </span>
+      )}
+      {kanbanStatus && (
+        <span
+          className="session-tree-kanban"
+          role="img"
+          aria-label={t("kanban.sidebarDot", { lane: kanbanStatus.laneName })}
+          title={t("kanban.sidebarDot", { lane: kanbanStatus.laneName })}
+        >
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 3v18" /><path d="M15 3v12" />
+          </svg>
         </span>
       )}
       <span className={`session-tree-meta${metaState}`} title={metaTitle}>{meta}</span>
@@ -854,6 +879,7 @@ const GroupRowView = memo(function GroupRowView({
   dragPhase,
   drag,
   handlers,
+  hasKanban,
 }: {
   row: Extract<SidebarRow, { kind: "group" }>;
   top: number;
@@ -868,6 +894,7 @@ const GroupRowView = memo(function GroupRowView({
   dragPhase: "armed" | "dragging" | null;
   drag: GroupDragHandlers;
   handlers: Handlers;
+  hasKanban: boolean;
 }) {
   const { t } = useI18n();
   const { project, expanded } = row;
@@ -932,6 +959,22 @@ const GroupRowView = memo(function GroupRowView({
         {!expanded && <ActivitySummary running={row.running} unread={row.unread} t={t} />}
       </button>
       <span className="session-tree-group-actions">
+        {hasKanban && (
+          <button
+            type="button"
+            className="session-tree-group-action"
+            aria-label={t("kanban.sidebarBoard", { name: project.name })}
+            title={t("kanban.sidebarBoard", { name: project.name })}
+            onClick={(event) => {
+              event.stopPropagation();
+              handlers.current.kanban?.onOpenBoard(project.root);
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 3v18" /><path d="M15 3v12" />
+            </svg>
+          </button>
+        )}
         <button
           type="button"
           className="session-tree-group-action"

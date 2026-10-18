@@ -11,6 +11,19 @@ import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
 import { openFileTab, saveFileViewerState, saveParkedFileViewerState, switchFileWorkspace, type ParkedFileWorkspace } from "./file-tab-state";
 import { SettingsPanel, SettingsSectionIcon } from "./SettingsPanel";
+import { KanbanBoard } from "./KanbanBoard";
+import { KanbanLaneStrip } from "./KanbanLaneStrip";
+import {
+  boardExists,
+  cardForSession,
+  kanbanAdvanceCard,
+  kanbanCreateCardForSession,
+  kanbanLinkCard,
+  kanbanSyncSeedLinks,
+  kanbanUnlinkCard,
+  useKanbanBoard,
+  useKanbanSessionIndex,
+} from "@/lib/kanban-mock";
 import { ProjectTrustDialog, type ProjectTrustFailure } from "./ProjectTrustDialog";
 import { BranchNavigator, hasSessionBranches } from "./BranchNavigator";
 import { SystemPromptPanel } from "./SystemPromptPanel";
@@ -227,6 +240,16 @@ export function AppShell() {
   const [projectTrustBusy, setProjectTrustBusy] = useState(false);
   const [projectTrustError, setProjectTrustError] = useState<ProjectTrustFailure | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => !initialNavigation.sidebarCollapsed);
+  // Kanban board (mock, UI design phase): the main-area view the center
+  // content switches to, the chat's top strip, and the fresh composer's choice.
+  const [centerView, setCenterView] = useState<"chat" | "board">("chat");
+  const [boardProjectDir, setBoardProjectDir] = useState<string | null>(null);
+  const [boardHighlightCardId, setBoardHighlightCardId] = useState<string | null>(null);
+  const boardHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [newSessionKanbanLaneId, setNewSessionKanbanLaneId] = useState<string | null>(null);
+  const newSessionKanbanLaneIdRef = useRef<string | null>(null);
+  newSessionKanbanLaneIdRef.current = newSessionKanbanLaneId;
+  const kanbanSessionIndex = useKanbanSessionIndex();
   const desktopSidebarOpenRef = useRef(!initialNavigation.sidebarCollapsed);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [rightPanelExpanded, setRightPanelExpanded] = useState(false);
@@ -839,6 +862,8 @@ export function AppShell() {
   }, [activeCwd, changeFileWorkspace, invalidateWorkspaceRestore, newSessionCwd, router, selectedSession, restoreWorkspaceContext]);
 
   const handleSelectSession = useCallback((session: SessionInfo, isRestore = false, entryId?: string, blockIndex?: number, options?: SelectSessionOptions) => {
+    // Picking a session means the user wants its chat, not whatever the center shows.
+    setCenterView("chat");
     setSearchTarget(entryId ? { sessionId: session.id, entryId, blockIndex } : null);
     invalidateWorkspaceRestore();
     const activeDraftKey = activeNewSessionDraftKeyRef.current;
@@ -973,6 +998,13 @@ export function AppShell() {
     setSelectedSession(session);
     hydrateSelectedSession(session.id);
     router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
+    // Kanban (mock): the composer's "track on board" choice becomes the session's card.
+    const laneId = newSessionKanbanLaneIdRef.current;
+    if (laneId) {
+      const title = session.name || session.firstMessage || session.id;
+      kanbanCreateCardForSession(session.projectRoot ?? session.cwd, session.id, title, laneId);
+    }
+    newSessionKanbanLaneIdRef.current = null;
   }, [invalidateWorkspaceRestore, router, hydrateSelectedSession]);
 
   const deliverSessionNotification = useCallback(({
@@ -1315,6 +1347,76 @@ export function AppShell() {
   const handleNewSessionBarFocusDone = useCallback(() => {
     newSessionBarFocusRef.current = null;
   }, []);
+  const showChat = selectedSession !== null || effectiveNewSessionCwd !== null;
+  // Kanban (mock, UI design phase): one board per project directory, created on
+  // demand for every project. The center switches between the chat and that
+  // project's board; the chat keeps a thin strip with this session's card.
+  const composerBoardDir = selectedSession === null && effectiveNewSessionCwd
+    ? contextForCwd(sidebarNewSessionContext, effectiveNewSessionCwd, newSessionMoveRef.current).project?.root ?? effectiveNewSessionCwd
+    : null;
+  const kanbanContextDir = selectedSession
+    ? selectedSession.projectRoot ?? selectedSession.cwd
+    : composerBoardDir;
+  const contextBoard = useKanbanBoard(kanbanContextDir);
+  const viewBoard = useKanbanBoard(centerView === "board" ? boardProjectDir : null);
+  const boardTabAvailable = showChat && (boardExists(kanbanContextDir) || centerView === "board");
+  const openKanbanBoardView = useCallback((projectDir: string | null, cardId: string | null = null) => {
+    if (projectDir) setBoardProjectDir(projectDir);
+    setCenterView("board");
+    setBoardHighlightCardId(cardId);
+    if (boardHighlightTimerRef.current) clearTimeout(boardHighlightTimerRef.current);
+    boardHighlightTimerRef.current = setTimeout(() => setBoardHighlightCardId(null), 2400);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (boardHighlightTimerRef.current) clearTimeout(boardHighlightTimerRef.current);
+    };
+  }, []);
+  // Moving the fresh composer to another project: its lanes are a different board's.
+  useEffect(() => {
+    setNewSessionKanbanLaneId(null);
+  }, [composerBoardDir]);
+  // Offer the seeded, sessionless cards the project's real pi sessions (once per board).
+  useEffect(() => {
+    if (!kanbanContextDir) return;
+    const projectSessions = sessionsWithSelection
+      .filter((session) => session.relation?.kind !== "subagent")
+      .filter((session) => (session.projectRoot ?? session.cwd) === kanbanContextDir)
+      .map((session) => ({ id: session.id, title: session.name || session.firstMessage || session.id }));
+    kanbanSyncSeedLinks(kanbanContextDir, projectSessions);
+  }, [kanbanContextDir, sessionsWithSelection]);
+  const sessionBoardCard = selectedSession && contextBoard ? cardForSession(contextBoard, selectedSession.id) : null;
+  const boardSessions = useMemo(
+    () => boardProjectDir
+      ? sessionsWithSelection.filter((session) => session.relation?.kind !== "subagent" && (session.projectRoot ?? session.cwd) === boardProjectDir)
+      : [],
+    [boardProjectDir, sessionsWithSelection],
+  );
+  const kanbanStrip = (
+    <KanbanLaneStrip
+      board={contextBoard}
+      card={selectedSession ? sessionBoardCard : null}
+      pendingLaneId={selectedSession === null ? newSessionKanbanLaneId : null}
+      isNewSession={selectedSession === null}
+      running={selectedSession ? runningSessionIds.has(selectedSession.id) : false}
+      onOpenBoard={() => {
+        if (kanbanContextDir) openKanbanBoardView(kanbanContextDir, sessionBoardCard?.id ?? null);
+      }}
+      onTrack={(laneId, cardId) => {
+        if (!selectedSession || !kanbanContextDir) return;
+        const title = selectedSession.name || selectedSession.firstMessage || selectedSession.id;
+        if (cardId) kanbanLinkCard(kanbanContextDir, cardId, selectedSession.id, title);
+        else kanbanCreateCardForSession(kanbanContextDir, selectedSession.id, title, laneId);
+      }}
+      onUnlink={() => {
+        if (sessionBoardCard && kanbanContextDir) kanbanUnlinkCard(kanbanContextDir, sessionBoardCard.id);
+      }}
+      onDemoAdvance={() => {
+        if (sessionBoardCard && kanbanContextDir) kanbanAdvanceCard(kanbanContextDir, sessionBoardCard.id);
+      }}
+    />
+  );
+
   const newSessionContextBar = selectedSession === null && effectiveNewSessionCwd ? (
     <NewSessionContextBar
       context={contextForCwd(sidebarNewSessionContext, effectiveNewSessionCwd, newSessionMoveRef.current)}
@@ -1326,9 +1428,13 @@ export function AppShell() {
       onOpenFolder={handleOpenFolderForNewSession}
       onRefreshWorktrees={handleRefreshNewSessionWorktrees}
       onCreateWorktree={handleCreateNewSessionWorktree}
+      board={composerBoardDir ? {
+        lanes: contextBoard?.lanes ?? [],
+        laneId: newSessionKanbanLaneId,
+        onLaneChange: setNewSessionKanbanLaneId,
+      } : null}
     />
   ) : null;
-  const showChat = selectedSession !== null || effectiveNewSessionCwd !== null;
   const projectTrustCwd = selectedSession?.cwd ?? effectiveNewSessionCwd;
   // While restoring initial session from URL, don't show the placeholder
   const showPlaceholder = initialSessionRestored && !showChat;
@@ -1439,6 +1545,10 @@ export function AppShell() {
         onBackgroundTaskDone={handleBackgroundTaskDone}
         onRunningSessionIdsChange={handleRunningSessionIdsChange}
         onSessionsChange={handleSessionsChange}
+        kanban={{
+          onOpenBoard: (projectRoot) => openKanbanBoardView(projectRoot),
+          sessionIndex: kanbanSessionIndex,
+        }}
       />
       <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
@@ -1997,6 +2107,87 @@ export function AppShell() {
     );
   };
 
+  const renderBoardViewToggle = (mobile: boolean) => {
+    if (!boardTabAvailable) return null;
+    const covered = mobile && isNarrowMobile && mobileToolbarMoreOpen;
+    const boardIcon = (
+      <svg width={mobile ? 15 : 11} height={mobile ? 15 : 11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 3v18" /><path d="M15 3v12" />
+      </svg>
+    );
+    if (mobile) {
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            if (centerView === "board") setCenterView("chat");
+            else if (kanbanContextDir) openKanbanBoardView(kanbanContextDir);
+          }}
+          disabled={covered || centerView === "board" && !boardProjectDir}
+          tabIndex={covered ? -1 : undefined}
+          aria-pressed={centerView === "board"}
+          title={centerView === "board" ? translate("kanban.chat") : translate("kanban.boardOpen")}
+          aria-label={centerView === "board" ? translate("kanban.chat") : translate("kanban.boardOpen")}
+          data-mobile-toolbar-board={mobile ? "true" : undefined}
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "center",
+            width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
+            visibility: covered ? "hidden" : "visible",
+            pointerEvents: covered ? "none" : "auto",
+            background: centerView === "board" ? "var(--bg-selected)" : "none",
+            border: "none", borderLeft: "1px solid var(--border)",
+            borderTop: centerView === "board" ? "2px solid var(--accent)" : "2px solid transparent",
+            color: centerView === "board" ? "var(--text)" : "var(--text-muted)",
+            cursor: "pointer", flexShrink: 0, transition: "color 0.12s, background 0.12s",
+          }}
+          onMouseEnter={(event) => { if (!covered) event.currentTarget.style.color = "var(--text)"; }}
+          onMouseLeave={(event) => { event.currentTarget.style.color = centerView === "board" ? "var(--text)" : "var(--text-muted)"; }}
+        >
+          {boardIcon}
+        </button>
+      );
+    }
+    return (
+      <div style={{ display: "flex", alignItems: "stretch", flexShrink: 0, borderRight: "1px solid var(--border)" }}>
+        {(["chat", "board"] as const).map((view) => {
+          const active = centerView === view;
+          const label = translate(view === "chat" ? "kanban.chat" : "kanban.boardOpen");
+          return (
+            <button
+              key={view}
+              type="button"
+              onClick={() => {
+                if (view === "board") {
+                  if (kanbanContextDir) setBoardProjectDir(kanbanContextDir);
+                  setCenterView("board");
+                } else {
+                  setCenterView("chat");
+                }
+              }}
+              aria-pressed={active}
+              title={label}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                height: "100%", padding: "0 11px",
+                background: active ? "var(--bg-selected)" : "none",
+                border: "none",
+                borderTop: active ? "2px solid var(--accent)" : "2px solid transparent",
+                color: active ? "var(--text)" : "var(--text-muted)",
+                cursor: "pointer", fontSize: 11, whiteSpace: "nowrap",
+                transition: "color 0.1s, background 0.1s",
+              }}
+              onMouseEnter={(event) => { event.currentTarget.style.color = "var(--text)"; }}
+              onMouseLeave={(event) => { event.currentTarget.style.color = active ? "var(--text)" : "var(--text-muted)"; }}
+            >
+              {view === "board" && boardIcon}
+              <span>{label}</span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderMainFileToggle = (mobile: boolean) => {
     const covered = mobile && isNarrowMobile && mobileToolbarMoreOpen;
     return (
@@ -2245,8 +2436,9 @@ export function AppShell() {
                   )}
                 </button>
               )}
-              {!isNarrowMobile && renderChatToolbarActions(true)}
-              {renderSessionStatsButton(true)}
+              {!isNarrowMobile && centerView === "chat" && renderChatToolbarActions(true)}
+              {centerView === "chat" && renderSessionStatsButton(true)}
+              {renderBoardViewToggle(true)}
               {renderMainFileToggle(true)}
               {isNarrowMobile && mobileToolbarMoreOpen && (
                 <div
@@ -2268,7 +2460,7 @@ export function AppShell() {
                     backdropFilter: "blur(10px)",
                   }}
                 >
-                  {renderChatToolbarActions(true)}
+                  {centerView === "chat" && renderChatToolbarActions(true)}
                 </div>
               )}
             </div>
@@ -2276,8 +2468,9 @@ export function AppShell() {
           {!isMobile && (
             <>
               {renderProjectTrustWarning(false)}
-              {renderChatToolbarActions(false)}
-              {renderSessionStatsButton(false)}
+              {renderBoardViewToggle(false)}
+              {centerView === "chat" && renderChatToolbarActions(false)}
+              {centerView === "chat" && renderSessionStatsButton(false)}
             </>
           )}
           {!isMobile && renderMainFileToggle(false)}
@@ -2537,6 +2730,8 @@ export function AppShell() {
         {/* Chat content */}
         <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
           {showChat ? (
+            <>
+            <div style={{ position: "absolute", inset: 0, display: centerView === "board" ? "none" : "block" }}>
             <ChatWindow
               key={sessionKey}
               session={selectedSession}
@@ -2577,7 +2772,26 @@ export function AppShell() {
               playDoneSound={playDoneSound}
               unlockAudio={unlockAudio}
               holdAudio={holdAudio}
+              kanbanStrip={kanbanStrip}
             />
+            </div>
+            {centerView === "board" && boardProjectDir && viewBoard ? (
+              <div style={{ position: "absolute", inset: 0 }}>
+                <KanbanBoard
+                  board={viewBoard}
+                  projectDir={boardProjectDir}
+                  projectName={getFileName(boardProjectDir) || boardProjectDir}
+                  sessions={boardSessions}
+                  runningSessionIds={runningSessionIds}
+                  highlightCardId={boardHighlightCardId}
+                  onOpenSession={(sessionId) => {
+                    const target = sessionsWithSelection.find((session) => session.id === sessionId);
+                    if (target) handleSelectSession(target);
+                  }}
+                />
+              </div>
+            ) : null}
+            </>
           ) : initialCwdStatus === "validating" ? (
             <div
               role="status"

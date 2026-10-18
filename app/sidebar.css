@@ -353,6 +353,21 @@ a.session-tree-main {
   vertical-align: -1px;
 }
 
+/* Kanban marker (mock, UI design phase): the session has a card on its
+   project's board. The branch's quiet accent, between the branch chip and
+   the time, so it marks the row without competing with its title. */
+.session-tree-kanban {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+  opacity: 0.75;
+}
+
+.session-tree-kanban svg {
+  display: block;
+}
+
 /* The right column: the time, or the running spinner / unread dot in its place. */
 .session-tree-meta {
   display: flex;
