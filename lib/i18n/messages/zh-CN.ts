@@ -1501,6 +1501,7 @@ export const zhCNLocale: LocalePlugin = {
     "kanban.cardFormSave": "保存",
     "kanban.cardFormCancel": "取消",
     "kanban.menuLabel": "卡片操作",
+    "kanban.menuFilter": "筛选",
     "kanban.menuOpenSession": "打开会话",
     "kanban.menuSessionGone": "该会话已不可用",
     "kanban.menuLink": "关联会话",

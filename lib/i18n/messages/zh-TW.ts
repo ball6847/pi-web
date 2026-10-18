@@ -1501,6 +1501,7 @@ export const zhTWLocale: LocalePlugin = {
     "kanban.cardFormSave": "儲存",
     "kanban.cardFormCancel": "取消",
     "kanban.menuLabel": "卡片操作",
+    "kanban.menuFilter": "篩選",
     "kanban.menuOpenSession": "開啟工作階段",
     "kanban.menuSessionGone": "該工作階段已不可用",
     "kanban.menuLink": "關聯工作階段",

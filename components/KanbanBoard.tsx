@@ -143,6 +143,7 @@ export function CardMenu({
   onClose: () => void;
 }) {
   const [filter, setFilter] = useState("");
+  const { t } = useI18n();
   const onCloseRef = useRef(onClose);
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -198,7 +199,7 @@ export function CardMenu({
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
           placeholder="…"
-          aria-label="Filter"
+          aria-label={t("kanban.menuFilter")}
           style={{
             display: "block",
             width: "100%",
@@ -284,6 +285,7 @@ function SessionPicker({
   onClose: () => void;
 }) {
   const [filter, setFilter] = useState("");
+  const { t } = useI18n();
   const onCloseRef = useRef(onClose);
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -378,7 +380,7 @@ function SessionPicker({
             onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
           >
             {option.running && (
-              <span style={{ flexShrink: 0, width: 6, height: 6, borderRadius: 3, background: "var(--accent)" }} title="Running" />
+              <span style={{ flexShrink: 0, width: 6, height: 6, borderRadius: 3, background: "var(--accent)" }} title={t("kanban.stripRunning")} />
             )}
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{option.title}</span>
           </button>
@@ -521,11 +523,13 @@ function CardView({
         ) : (
           <button
             type="button"
+            disabled={lane.fixed}
             onClick={(event) => {
               event.stopPropagation();
+              if (lane.fixed) return;
               onOpenLinkPicker(event.currentTarget.getBoundingClientRect(), card);
             }}
-            title={t("kanban.menuLink")}
+            title={lane.fixed ? t("kanban.backlogNoSessions") : t("kanban.menuLink")}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -536,7 +540,7 @@ function CardView({
               background: "none",
               color: "var(--text-dim)",
               fontSize: 10.5,
-              cursor: "pointer",
+              cursor: lane.fixed ? "default" : "pointer",
             }}
           >
             <LinkIcon size={10} />
@@ -705,6 +709,9 @@ function CardForm({
             if (!trimmedTitle) return;
             if (initial) {
               kanbanUpdateCard(projectDir, initial.id, { title: trimmedTitle, description });
+              if (needsSession && session && session.id !== initial.sessionId) {
+                kanbanLinkCard(projectDir, initial.id, session.id, session.title);
+              }
             } else {
               kanbanAddCard(projectDir, lane.id, {
                 title: trimmedTitle,
@@ -1160,12 +1167,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onSelect: () => kanbanUnlinkCard(projectDir, menuCard.id),
       });
     } else {
+      const backlogLane = board.lanes.find((l) => l.id === menuCard.laneId)?.fixed;
       entries.push({
         id: "link",
         label: t("kanban.menuLink"),
         icon: <LinkIcon />,
-        disabled: sessionOptions.length === 0,
-        disabledTitle: t("kanban.cardFormSessionRequired"),
+        disabled: Boolean(backlogLane) || sessionOptions.length === 0,
+        disabledTitle: backlogLane ? t("kanban.backlogNoSessions") : t("kanban.cardFormSessionRequired"),
         onSelect: () => {
           if (menuFor) setLinkFor({ cardId: menuCard.id, anchor: menuFor.anchor });
         },

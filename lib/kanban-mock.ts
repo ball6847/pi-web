@@ -343,6 +343,8 @@ class KanbanMockStore {
     }
     const card = board.cards.find((c) => c.id === cardId);
     if (!card) return;
+    // The backlog never takes a session.
+    if (board.lanes.find((l) => l.id === card.laneId)?.fixed) return;
     card.sessionId = sessionId;
     card.sessionTitle = sessionTitle;
     card.updatedAt = Date.now();

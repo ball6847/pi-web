@@ -8,6 +8,7 @@
 
 import { useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import type { KanbanBoard as KanbanBoardData, KanbanCard, KanbanLane } from "@/lib/kanban-mock";
 import { laneIndex } from "@/lib/kanban-mock";
 import { CardMenu, type MenuEntry } from "./KanbanBoard";
@@ -48,6 +49,7 @@ export function KanbanLaneStrip({
   onDemoAdvance,
 }: KanbanLaneStripProps) {
   const { t } = useI18n();
+  const mobile = useIsMobile();
   const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null);
 
   if (!board) return null;
@@ -225,10 +227,11 @@ export function KanbanLaneStrip({
               borderRadius: 6,
               cursor: "pointer",
             }}
+            title={t("kanban.stripViewBoard")}
             onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
             onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; e.currentTarget.style.background = "none"; }}
           >
-            {t("kanban.stripViewBoard")}
+            {mobile ? null : t("kanban.stripViewBoard")}
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
             </svg>
