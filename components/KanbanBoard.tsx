@@ -144,17 +144,87 @@ export function CardMenu({
 }) {
   const [filter, setFilter] = useState("");
   const { t } = useI18n();
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   useEffect(() => {
     onCloseRef.current = onClose;
   });
 
+  // Keyboard entry: land on the filter (when shown) or the first item, so
+  // arrow keys and Enter work from the moment the menu opens.
+  useEffect(() => {
+    const surface = surfaceRef.current;
+    if (!surface) return;
+    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const target =
+      surface.querySelector<HTMLElement>("input") ??
+      surface.querySelector<HTMLElement>("button[role='menuitem']:not(:disabled)");
+    target?.focus({ preventScroll: true });
+  }, []);
+
   useEffect(() => {
     const close = () => onCloseRef.current();
+    const isTextEntry = (el: Element | null) =>
+      el !== null &&
+      (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el instanceof HTMLElement && el.isContentEditable));
     const onKeyDown = (event: KeyboardEvent) => {
+      const surface = surfaceRef.current;
+      if (!surface || event.isComposing || event.keyCode === 229) return;
       if (event.key === "Escape") {
+        event.preventDefault();
         event.stopPropagation();
+        // A filter with text in it is cleared first; the next Escape closes.
+        const field = surface.querySelector<HTMLInputElement>("input");
+        if (field && field.value) {
+          setFilter("");
+          field.focus({ preventScroll: true });
+          return;
+        }
         close();
+        // setTimeout, not rAF: a hidden tab defers rAF indefinitely, and the
+        // commit is synchronous either way, so the timeout always sees the
+        // post-close state.
+        setTimeout(() => {
+          const opener = openerRef.current;
+          if (!opener || !opener.isConnected) return;
+          const active = document.activeElement;
+          const stranded = active === document.body || (active instanceof Element && surfaceRef.current !== null && surfaceRef.current.contains(active));
+          if (stranded) opener.focus({ preventScroll: true });
+        }, 0);
+        return;
+      }
+      const target = event.target instanceof Element ? event.target : null;
+      const inside = target !== null && surface.contains(target);
+      if (!inside) return;
+      if (event.key === "Tab") {
+        // No focus trap: Tabbing away from the menu closes it and focus goes
+        // back to the opener, on from there.
+        close();
+        setTimeout(() => {
+          const opener = openerRef.current;
+          if (!opener || !opener.isConnected) return;
+          const active = document.activeElement;
+          const stranded = active === document.body || (active instanceof Element && surfaceRef.current !== null && surfaceRef.current.contains(active));
+          if (stranded) opener.focus({ preventScroll: true });
+        }, 0);
+        return;
+      }
+      // The filter field keeps its letters and caret keys; Up and Down go on to the items.
+      const leavesFilter = (event.key === "ArrowDown" || event.key === "ArrowUp") && isTextEntry(target);
+      if (isTextEntry(target) && !leavesFilter) return;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End") {
+        const list = [...surface.querySelectorAll<HTMLButtonElement>("button[role='menuitem']:not(:disabled)")];
+        if (list.length === 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const index = target ? list.indexOf(target as HTMLButtonElement) : -1;
+        let next: number;
+        if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = list.length - 1;
+        else if (event.key === "ArrowDown") next = index < 0 ? 0 : (index + 1) % list.length;
+        else next = index < 0 ? list.length - 1 : (index - 1 + list.length) % list.length;
+        list[next].focus();
       }
     };
     const onPointerDown = (event: MouseEvent) => {
@@ -175,6 +245,7 @@ export function CardMenu({
 
   return createPortal(
     <div
+      ref={surfaceRef}
       data-kanban-card-menu
       role="menu"
       style={{
