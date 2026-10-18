@@ -201,7 +201,8 @@ export function NewSessionContextBar({
                 >
                   {[
                     { id: null as string | null, name: t("kanban.composerOff"), fixed: false, title: t("kanban.composerOffTitle") },
-                    ...board.lanes.map((l) => ({ id: l.id, name: l.name, fixed: Boolean(l.fixed), title: l.fixed ? t("kanban.backlogNoSessions") : t("kanban.laneDescription", { description: l.description }) })),
+                    // The backlog option is disabled, and its tooltip says why; other lanes are user data.
+                    ...board.lanes.map((l) => ({ id: l.id, name: l.name, fixed: Boolean(l.fixed), title: l.fixed ? t("kanban.backlogNoSessions") : l.description || l.name })),
                   ].map((option) => {
                     // The backlog never takes a session, so a tracked start there is refused.
                     const disabled = option.fixed;
