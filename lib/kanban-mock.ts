@@ -74,7 +74,9 @@ export function defaultLanes(): KanbanLane[] {
 /**
  * The sample cards of a fresh board. Ids are deterministic (no clock, no
  * random) so a server render and the first client render of the same project
- * agree; a card id only has to be unique within its board.
+ * agree; a card id only has to be unique within its board. The titles are
+ * deliberately project-neutral: a board exists for every project, and showing
+ * one project's real work items in another reads as a bug.
  */
 function seedCards(): KanbanCard[] {
   const now = Date.now();
@@ -98,14 +100,14 @@ function seedCards(): KanbanCard[] {
     updatedAt: now - ageDays * day,
   });
   return [
-    card(0, "lane-backlog", "Write release notes for 0.13", "Collect the changes since the last tag into the notes.", 6),
-    card(1, "lane-backlog", "Investigate SSE drops on reconnect", "Long sessions lose their event stream after a network blip.", 5),
-    card(2, "lane-todo", "Rework the sidebar project groups", "Group order and the drag affordance need a pass.", 4, true),
-    card(3, "lane-todo", "Fix dark-mode contrast in the file viewer", "Line numbers wash out on the Pine theme.", 3, true),
-    card(4, "lane-plan", "Add per-project MCP presets", "A project .pi/mcp.json with a shared default server set.", 3),
-    card(5, "lane-implement", "Rework the subagent viewer tabs", "Keep the transcript tab light while the subagent runs.", 2),
-    card(6, "lane-deploy", "Bump the pi SDK to 1.3", "Wait for the provider catalog change to land upstream.", 1),
-    card(7, "lane-done", "Stacked dialogs in Settings", "Escape closes only the topmost dialog.", 1),
+    card(0, "lane-backlog", "Write release notes for the next tag", "Collect the changes since the last release into the notes.", 6),
+    card(1, "lane-backlog", "Investigate the flaky tests", "A couple of suites fail only on rerun; find the shared state.", 5),
+    card(2, "lane-todo", "Refactor the build scripts", "The same steps are duplicated across environments.", 4, true),
+    card(3, "lane-todo", "Speed up the slowest startup path", "Profiling points at one heavy import.", 3, true),
+    card(4, "lane-plan", "Draft the next milestone", "Scope the work that lands after this release.", 3),
+    card(5, "lane-implement", "Replace ad-hoc logging with structured logs", "Errors are hard to follow across the stack.", 2),
+    card(6, "lane-deploy", "Roll out the new toolchain", "Wait for the upstream change to land, then flip the switch.", 1),
+    card(7, "lane-done", "Tidy the README", "Move stale notes into the docs folder.", 1),
   ];
 }
 
@@ -433,8 +435,12 @@ class KanbanMockStore {
       offered += 1;
       if (offered >= 2) break;
     }
-    board.seedSynced = true;
-    this.commit();
+    // Only a board whose seed actually took a session is synced: with zero
+    // real sessions the seeded cards must stay eligible for the next time.
+    if (offered > 0) {
+      board.seedSynced = true;
+      this.commit();
+    }
   }
 }
 
