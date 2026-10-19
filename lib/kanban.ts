@@ -529,3 +529,13 @@ export function acquireBoardWatcherForTests(key: string, creating = false): () =
 export function kanbanBoardSnapshotForTests(projectDir: string): KanbanBoard | null {
   return entries.get(projectDir)?.board ?? null;
 }
+
+/**
+ * The banner's Retry, without a renderer: re-enqueues the entry's `retryable`
+ * writes (the session-missing failures), clears the error and refetches.
+ * Exported so node tests can pin that a Retry re-posts rather than drops
+ * (the store's resetKanbanStateForTests pattern).
+ */
+export function retryBoardForTests(key: string): void {
+  retryBoard(key);
+}
