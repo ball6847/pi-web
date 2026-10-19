@@ -58,6 +58,27 @@ signoff: null
 
 ### Design
 
+SDK surface (verified against the installed pi 1.2.0 — `dist/core/extensions/types.d.ts`,
+`pi-agent-core` types):
+- `ExtensionAPI.registerTool(tool)` exists. The factory's `ExtensionContext`, and the
+  per-call `ExtensionToolContext` that `execute` receives, both carry `cwd` and a
+  read-only `sessionManager`, whose `ReadonlySessionManager` pick includes
+  `getSessionId(): string` — the handler finds its own session id with no extra
+  plumbing.
+- `execute(toolCallId, params, signal, onUpdate, ctx)` resolves to an
+  `AgentToolResult` (`{ content: [{ type: "text", text }], details }`): the model
+  sees the text, `details` feeds the transcript UI.
+- `parameters` is a TypeBox schema. `typebox` 1.3.27 is a direct dependency of
+  pi-coding-agent and already sits in the tree; load it through the existing
+  `lib/pi-sdk-internals.ts` loader (the repo's pattern for SDK modules the package
+  root does not export) so pi-web's `package.json` gains no new entry (loop rule:
+  no new dependencies without operator approval).
+- `promptSnippet` / `promptGuidelines` exist on `ToolDefinition` — the "when to
+  call it" guidance belongs in `promptGuidelines`, not only the description.
+- A registered tool is `direct` exposure, `defaultActive: true` — on the moment the
+  built-in loads; chat-only sessions load no built-ins at all, so nothing changes
+  for them.
+
 ```
  model (assistant)                built-in kanban extension            store
       |  tool call                  |                                    |
@@ -72,18 +93,19 @@ signoff: null
       |                             | result (refusals included)         |
 ```
 
-1. **Tool**: `kanban_advance`, zero required parameters (the session itself
-   is the argument the handler reads from its own context — the model never
-   names a card id, so it cannot move someone else's card). Answer object:
-   `{ moved: true, from, to }` on success; `{ moved: false, reason }` for
-   `not-tracked` (no card / no board / read-only session), `last-lane`, and
-   a store refusal (with the store's message).
+1. **Tool**: `kanban_advance`, zero parameters (`Type.Object({})`) — the session
+   itself is the argument the handler reads from `ctx` (session id via
+   `sessionManager`, project from `ctx.cwd`); the model never names a card id, so it
+   cannot move someone else's card. Answer object: `{ moved: true, from, to }` on
+   success; `{ moved: false, reason }` for `not-tracked` (no card / no board /
+   read-only session), `last-lane`, and a store refusal (with the store's message).
+   The same object goes in `details`.
 2. **Registration**: new built-in in `lib/builtin-extensions.ts`, same
-   shape as the mcp one; enabled by default (a no-op is cheap and the
-   tool's description carries when to call it: "Call this when you have
-   finished the stage the session's kanban card is in; it moves the card
-   one lane. Nothing happens if this session has no card."). It joins no
-   preset's required list; chat-only stays tool-less.
+   shape as the mcp one; enabled by default (a no-op is cheap). The model
+   learns when to call it from a `promptSnippet` line and a `promptGuidelines`
+   bullet ("call it when the stage the card tracks is done; nothing happens if
+   this session has no card"). It joins no preset's required list; chat-only
+   stays tool-less.
 3. **Handler path**: `session.cwd` → `resolveProject().projectRoot` →
    `readBoard(root, { create: false })` → look up the card by the
    session's own id → `applyMutation(root, { action: "advance-card",
