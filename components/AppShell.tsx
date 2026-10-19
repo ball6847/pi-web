@@ -13,15 +13,23 @@ import { openFileTab, saveFileViewerState, saveParkedFileViewerState, switchFile
 import { SettingsPanel, SettingsSectionIcon } from "./SettingsPanel";
 import { KanbanBoard } from "./KanbanBoard";
 import { KanbanLaneStrip } from "./KanbanLaneStrip";
-import { cardForSession } from "@/lib/kanban-shared";
+import { cardForSession, sessionlessCardsByRecency } from "@/lib/kanban-shared";
 import {
   kanbanAdvanceCard,
+  kanbanBoardSnapshot,
   kanbanCreateCardForSession,
   kanbanLinkCard,
   kanbanUnlinkCard,
   useKanbanBoard,
   useKanbanSessionIndex,
 } from "@/lib/kanban";
+import {
+  KANBAN_BACKLOG_LANE_ID,
+  KANBAN_OFF_PENDING,
+  type KanbanCard,
+  type KanbanNewSessionPending,
+  type KanbanNewSessionPick,
+} from "@/lib/kanban-types";
 import { ProjectTrustDialog, type ProjectTrustFailure } from "./ProjectTrustDialog";
 import { BranchNavigator, hasSessionBranches } from "./BranchNavigator";
 import { SystemPromptPanel } from "./SystemPromptPanel";
@@ -50,7 +58,7 @@ import { setupPushSubscription } from "@/lib/push-client";
 import { getInitialNavigation, linkedSessionId, withTabOpen } from "@/lib/initial-navigation";
 import { clearTabOpenSession, getTabOpen, setTabOpenNewSession, setTabOpenSession } from "@/lib/tab-session";
 import { mergeCatalogRow } from "./session-catalog-helpers";
-import { getDraft, rekeyDraft } from "@/lib/draft-store";
+import { getDraft, rekeyDraft, setDraft } from "@/lib/draft-store";
 import {
   contextForCwd,
   type NewSessionContext,
@@ -244,9 +252,9 @@ export function AppShell() {
   const [boardProjectDir, setBoardProjectDir] = useState<string | null>(null);
   const [boardHighlightCardId, setBoardHighlightCardId] = useState<string | null>(null);
   const boardHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [newSessionKanbanLaneId, setNewSessionKanbanLaneId] = useState<string | null>(null);
-  const newSessionKanbanLaneIdRef = useRef<string | null>(null);
-  newSessionKanbanLaneIdRef.current = newSessionKanbanLaneId;
+  const [newSessionKanbanPending, setNewSessionKanbanPending] = useState<KanbanNewSessionPending>(KANBAN_OFF_PENDING);
+  const newSessionKanbanPendingRef = useRef<KanbanNewSessionPending>(KANBAN_OFF_PENDING);
+  newSessionKanbanPendingRef.current = newSessionKanbanPending;
   const kanbanSessionIndex = useKanbanSessionIndex();
   const desktopSidebarOpenRef = useRef(!initialNavigation.sidebarCollapsed);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
@@ -996,13 +1004,30 @@ export function AppShell() {
     setSelectedSession(session);
     hydrateSelectedSession(session.id);
     router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
-    // Kanban: the composer's "track on board" choice becomes the session's card.
-    const laneId = newSessionKanbanLaneIdRef.current;
-    if (laneId) {
-      const title = session.name || session.firstMessage || session.id;
-      kanbanCreateCardForSession(session.projectRoot ?? session.cwd, session.id, title, laneId);
+    // Kanban: the composer's "track on board" choice becomes the session's card
+    // (new card in the picked lane) or links the session onto the existing card
+    // the composer pre-picked ("Start session" from the board). A backlog card
+    // first advances one lane (its first work lane): the backlog never takes a
+    // session and the store refuses the link there. A card that meanwhile got
+    // linked or deleted is refused and the pending choice is dropped quietly.
+    const pendingPick = newSessionKanbanPendingRef.current;
+    newSessionKanbanPendingRef.current = KANBAN_OFF_PENDING;
+    setNewSessionKanbanPending(KANBAN_OFF_PENDING);
+    if (pendingPick.kind !== "off") {
+      const dir = session.projectRoot ?? session.cwd;
+      if (dir === pendingPick.projectDir) {
+        const title = session.name || session.firstMessage || session.id;
+        if (pendingPick.kind === "new-card") {
+          kanbanCreateCardForSession(dir, session.id, title, pendingPick.laneId);
+        } else {
+          const card = kanbanBoardSnapshot(dir)?.cards.find((c) => c.id === pendingPick.cardId) ?? null;
+          if (card && card.sessionId === null) {
+            if (card.laneId === KANBAN_BACKLOG_LANE_ID) kanbanAdvanceCard(dir, card.id);
+            kanbanLinkCard(dir, card.id, session.id, title);
+          }
+        }
+      }
     }
-    newSessionKanbanLaneIdRef.current = null;
   }, [invalidateWorkspaceRestore, router, hydrateSelectedSession]);
 
   const deliverSessionNotification = useCallback(({
@@ -1371,10 +1396,61 @@ export function AppShell() {
       if (boardHighlightTimerRef.current) clearTimeout(boardHighlightTimerRef.current);
     };
   }, []);
-  // Moving the fresh composer to another project: its lanes are a different board's.
+  // Moving the fresh composer to another project parks the pending board
+  // choice: its lanes and cards are a different board's. A move within the
+  // same project (a worktree) keeps it: the board belongs to the project
+  // root, not the worktree. composerBoardDir null (a session is selected)
+  // also clears it.
   useEffect(() => {
-    setNewSessionKanbanLaneId(null);
+    setNewSessionKanbanPending((current) => (
+      !current || current.kind === "off" || (composerBoardDir !== null && current.projectDir === composerBoardDir)
+        ? current
+        : KANBAN_OFF_PENDING
+    ));
   }, [composerBoardDir]);
+  // The bar reports a pick without the board's project root; the shell pins
+  // the pending choice to the board it was made for.
+  const handleNewSessionKanbanPick = useCallback((pick: KanbanNewSessionPick) => {
+    if (pick.kind === "off" || !composerBoardDir) {
+      setNewSessionKanbanPending(KANBAN_OFF_PENDING);
+      return;
+    }
+    setNewSessionKanbanPending(pick.kind === "new-card"
+      ? { kind: "new-card", projectDir: composerBoardDir, laneId: pick.laneId }
+      : { kind: "attach", projectDir: composerBoardDir, cardId: pick.cardId, cardTitle: pick.cardTitle });
+  }, [composerBoardDir]);
+
+  // "Start session" from the board's card menu: open the fresh composer for
+  // the board's project with the card's text as starting draft, and attach
+  // the session to this card when it is created. Nothing is written to the
+  // board until the session really exists: abandoning the composer (another
+  // pick, another card, selecting a session) clears the pending choice.
+  const handleKanbanStartSession = useCallback((card: KanbanCard) => {
+    const dir = boardProjectDir;
+    if (!dir) return;
+    const context = sidebarNewSessionContext;
+    const sameProject = context?.project.root === dir;
+    const cwd = sameProject ? context!.cwd : dir;
+    const known = context?.projects.find((p) => p.root === dir);
+    const projectKey = sameProject ? context!.project.key : known?.key ?? dir;
+    const projectRoot = sameProject ? context!.project.root : known?.root ?? dir;
+    setDraft(parkedNewSessionDraftKey(cwd), {
+      value: card.description ? `${card.title}\n\n${card.description}` : card.title,
+      images: [],
+    });
+    setNewSessionKanbanPending({ kind: "attach", projectDir: dir, cardId: card.id, cardTitle: card.title });
+    setCenterView("chat");
+    const control = sidebarControlRef.current;
+    if (control) {
+      if (!sameProject) {
+        newSessionMoveRef.current = { cwd, project: { key: projectKey, root: projectRoot }, branch: null };
+      }
+      control.startNewSessionIn({ cwd, projectKey, projectRoot });
+    } else {
+      handleNewSession(`kb-${Date.now()}`, cwd, projectKey);
+    }
+  }, [boardProjectDir, sidebarNewSessionContext, handleNewSession]);
+
   const sessionBoardCard = selectedSession && contextBoard ? cardForSession(contextBoard, selectedSession.id) : null;
   const boardSessions = useMemo(
     () => boardProjectDir
@@ -1386,7 +1462,7 @@ export function AppShell() {
     <KanbanLaneStrip
       board={contextBoard}
       card={selectedSession ? sessionBoardCard : null}
-      pendingLaneId={selectedSession === null ? newSessionKanbanLaneId : null}
+      pending={selectedSession === null ? newSessionKanbanPending : null}
       isNewSession={selectedSession === null}
       running={selectedSession ? runningSessionIds.has(selectedSession.id) : false}
       onOpenBoard={() => {
@@ -1420,8 +1496,9 @@ export function AppShell() {
       onCreateWorktree={handleCreateNewSessionWorktree}
       board={composerBoardDir ? {
         lanes: contextBoard?.lanes ?? [],
-        laneId: newSessionKanbanLaneId,
-        onLaneChange: setNewSessionKanbanLaneId,
+        cards: contextBoard ? sessionlessCardsByRecency(contextBoard) : [],
+        pending: newSessionKanbanPending,
+        onChange: handleNewSessionKanbanPick,
       } : null}
     />
   ) : null;
@@ -2778,6 +2855,7 @@ export function AppShell() {
                     const target = sessionsWithSelection.find((session) => session.id === sessionId);
                     if (target) handleSelectSession(target);
                   }}
+                  onStartSession={handleKanbanStartSession}
                 />
               </div>
             ) : null}
