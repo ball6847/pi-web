@@ -99,6 +99,17 @@ export function addCard(
   return { ...board, cards: [...others, card] };
 }
 
+/**
+ * The board's sessionless cards for an "attach to card" menu: newest first
+ * (your recent cards are the top hits), ties keep the board's order. The list
+ * self-shrinks as linking consumes cards; a busy backlog is the growth case.
+ */
+export function sessionlessCardsByRecency(board: KanbanBoard): KanbanCard[] {
+  return board.cards
+    .filter((card) => card.sessionId === null)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
 /** Title and description edits. Refused (null) for an unknown card; a blank title is ignored. */
 export function updateCard(
   board: KanbanBoard,
@@ -122,13 +133,6 @@ export function deleteCard(board: KanbanBoard, cardId: string): KanbanBoard {
 }
 
 /**
- * Moves a card to another lane (a lane transition; the card goes last in it).
- * Refused (null) for an unknown card or lane; for a sessionless card going to
- * a work lane (a sessionless card only rests in the backlog); and for a card
- * with a session going to the backlog (which holds none). The link is never
- * touched.
- */
-/**
  * Whether the move-card rules allow `card` to rest in `lane`: a sessionless
  * card only in the fixed backlog, a linked card nowhere near it. The view
  * uses it to mark undroppable lanes during a drag (the same gate
@@ -138,6 +142,13 @@ export function canRestInLane(card: KanbanCard, lane: KanbanLane): boolean {
   return (card.sessionId === null) === !!lane.fixed;
 }
 
+/**
+ * Moves a card to another lane (a lane transition; the card goes last in it).
+ * Refused (null) for an unknown card or lane; for a sessionless card going to
+ * a work lane (a sessionless card only rests in the backlog); and for a card
+ * with a session going to the backlog (which holds none). The link is never
+ * touched.
+ */
 export function moveCardToLane(board: KanbanBoard, cardId: string, laneId: string, now: number): KanbanBoard | null {
   const card = board.cards.find((c) => c.id === cardId);
   const lane = laneById(board, laneId);

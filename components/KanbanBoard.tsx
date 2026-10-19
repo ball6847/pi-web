@@ -51,6 +51,8 @@ export interface KanbanBoardProps {
   /** The card to scroll to and ring, set when the user jumped here from the chat strip. */
   highlightCardId?: string | null;
   onOpenSession(sessionId: string, title: string): void;
+  /** Start a new session from a sessionless card: opens the composer prefilled and pre-linked. */
+  onStartSession(card: KanbanCard): void;
 }
 
 // -- shared chrome -----------------------------------------------------------
@@ -1331,7 +1333,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
 }
 
 function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; notice: React.ReactNode }) {
-  const { board, projectDir, projectName, sessions, runningSessionIds, highlightCardId, onOpenSession, notice } = props;
+  const { board, projectDir, projectName, sessions, runningSessionIds, highlightCardId, onOpenSession, onStartSession, notice } = props;
   const { t } = useI18n();
   const mobile = useIsMobile();
   const [configOpen, setConfigOpen] = useState(false);
@@ -1441,6 +1443,12 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
     } else {
       const backlogLane = board.lanes.find((l) => l.id === menuCard.laneId)?.fixed;
       entries.push({
+        id: "start",
+        label: t("kanban.menuStartSession"),
+        icon: <ChatIcon />,
+        onSelect: () => onStartSession(menuCard),
+      });
+      entries.push({
         id: "link",
         label: t("kanban.menuLink"),
         icon: <LinkIcon />,
@@ -1488,7 +1496,7 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
       },
     });
     return entries;
-  }, [menuCard, board, sessionIds, sessionOptions, menuFor, projectDir, t, onOpenSession, openForm, setHighlightFlash]);
+  }, [menuCard, board, sessionIds, sessionOptions, menuFor, projectDir, t, onOpenSession, onStartSession, openForm, setHighlightFlash]);
 
   const dragView = drag.view;
 
