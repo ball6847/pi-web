@@ -128,6 +128,16 @@ export function deleteCard(board: KanbanBoard, cardId: string): KanbanBoard {
  * with a session going to the backlog (which holds none). The link is never
  * touched.
  */
+/**
+ * Whether the move-card rules allow `card` to rest in `lane`: a sessionless
+ * card only in the fixed backlog, a linked card nowhere near it. The view
+ * uses it to mark undroppable lanes during a drag (the same gate
+ * moveCardToLane applies on the write).
+ */
+export function canRestInLane(card: KanbanCard, lane: KanbanLane): boolean {
+  return (card.sessionId === null) === !!lane.fixed;
+}
+
 export function moveCardToLane(board: KanbanBoard, cardId: string, laneId: string, now: number): KanbanBoard | null {
   const card = board.cards.find((c) => c.id === cardId);
   const lane = laneById(board, laneId);
