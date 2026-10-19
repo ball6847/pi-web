@@ -509,3 +509,13 @@ export function kanbanCreateCardForSession(projectDir: string | null, sessionId:
   }
   enqueue(entryFor(projectDir), action);
 }
+
+/**
+ * The watch lifecycle the useWatchBoard hook drives: the first watcher on a
+ * board starts its revision poll, the last one stops it, and a re-acquire on
+ * a cached board checks now. Exported so node tests can drive it without a
+ * renderer (same pattern as the store's resetKanbanStateForTests).
+ */
+export function acquireBoardWatcherForTests(key: string, creating = false): () => void {
+  return acquire(key, creating);
+}
