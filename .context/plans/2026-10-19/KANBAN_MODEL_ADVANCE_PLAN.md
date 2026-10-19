@@ -11,6 +11,11 @@ signoff: null
 
 # Plan: Model-driven card advancement for the kanban board
 
+> Postponed 2026-10-19: the operator inserted two card-UI milestones (M5 activity
+> indicator, M6 manual drag-and-drop) ahead of this plan — see
+> `KANBAN_CARD_UI_PLAN.md`. M6 retires the "Demo:" entries this plan was going to
+> remove, so this plan lands as the tool alone; its sign-off gate still applies.
+
 ## Background & Context
 
 - **Business Driver**: The board's rules say moving a card is the model's call

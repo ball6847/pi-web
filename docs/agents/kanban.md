@@ -63,5 +63,7 @@
 
 ## Not built
 - Shared board storage under `~/.pi/agent`: the board is per project (and committable), so parallel worktrees of the same repo carry separate copies and task state forks; the store is planned to move to pi's shared agent storage (roadmap M4) so every worktree of a project shares one board. Until it lands, the per-project file above stands.
+- A card activity indicator on the linked-session chip (spinner while the session runs, an amber dot when it awaits the user's input — the sidebar row's states, planned M5).
+- Manual drag-and-drop of a card between lanes (planned M6; it changes the no-manual-moves rule for the interim and retires the "Demo:" advance entries; model-driven advancement stays future work).
 - The model advancing cards on the protocol side: the card moves when the model decides the stage is done, replacing the "Demo:" menu entries.
 - A push channel for the board (the revision poll is the sync) and undo; several boards per project.
