@@ -43,15 +43,17 @@ function fixture(t, { allow = true } = {}) {
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     fs.rmSync(root, { recursive: true, force: true });
   });
+  const key = `--${project.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+  const path = join(agentDir, "kanban", key, "kanban.json");
   return {
     root,
     agentDir,
     project,
-    path: join(project, ".pi", "kanban.json"),
-    file: () => JSON.parse(fs.readFileSync(join(project, ".pi", "kanban.json"), "utf8")),
-    bytes: () => fs.readFileSync(join(project, ".pi", "kanban.json"), "utf8"),
-    exists: () => fs.existsSync(join(project, ".pi", "kanban.json")),
-    stat: () => fs.statSync(join(project, ".pi", "kanban.json")),
+    path,
+    file: () => JSON.parse(fs.readFileSync(path, "utf8")),
+    bytes: () => fs.readFileSync(path, "utf8"),
+    exists: () => fs.existsSync(path),
+    stat: () => fs.statSync(path),
   };
 }
 
@@ -216,6 +218,17 @@ test("a POST link-session for a session that does not exist in the project is a 
   const linked = await post({ cwd: f.project, action: "link-session", cardId: "c1", sessionId: "real-1", sessionTitle: "Real" });
   assert.equal(linked.status, 200);
   assert.equal(linked.body.board.cards.find((c) => c.id === "c1").sessionId, "real-1");
+});
+
+test("a POST add-card with a session into the fixed backlog is a 400 refused and writes nothing", async (t) => {
+  const f = fixture(t);
+  await post({ cwd: f.project, action: "add-card", laneId: "lane-todo", title: "Existing" }); // materialize the board
+  const before = f.file();
+  fabricateSession(f.agentDir, f.project, "real-1");
+  const refused = await post({ cwd: f.project, action: "add-card", laneId: "lane-backlog", title: "Tracked", sessionId: "real-1", sessionTitle: "Real" });
+  assert.equal(refused.status, 400);
+  assert.equal(refused.body.code, "refused");
+  assert.equal(JSON.stringify(f.file()), JSON.stringify(before), "the refusal writes nothing");
 });
 
 test("a POST mutation round-trips to the file and bumps the revision", async (t) => {
