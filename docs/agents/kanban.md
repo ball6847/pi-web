@@ -9,6 +9,7 @@
 ## File and envelope
 - Path `join(cwd, ".pi", "kanban.json")`; the content is `{ "schemaVersion": 1, "board": { projectDir, lanes, cards } }`. A board never written is created on the first creating read (the one write a GET makes; `?create=0` reads a missing board as empty instead) with the six default lanes (`lane-backlog` fixed, Todo, Plan, Implement, Deploy, Done) and zero cards.
 - Written atomically (temp sibling + rename, mode 0644 kept — it is meant to be committable). A file that cannot be parsed (garbage, not a regular file, over 4 MiB, bad shape) is set aside as `kanban.json.corrupt-<ms>` and a fresh board starts; a file with `schemaVersion > 1` is **refused** (`unsupported-schema`, 500) and left untouched.
+- The board is per project, so keeping it out of version control is a one-line choice in the project's own `.gitignore`: `.pi/kanban.json` (use `.pi/kanban.json*` to also cover the corrupt-backup siblings). Without the line the board is tracked like any other file; the write path does not force either way.
 - Hand edits are read leniently: invalid cards are skipped, a card in a vanished lane goes to the backlog (unlinked), a session carried by two cards stays on the first, and `projectDir` is always overwritten with the folder read.
 
 ## Route (`app/api/kanban/route.ts`)
@@ -60,4 +61,4 @@
 
 ## Not built
 - The model advancing cards on the protocol side: the card moves when the model decides the stage is done, replacing the "Demo:" menu entries.
-- A push channel for the board (the revision poll is the sync), undo, several boards per project, and a `.gitignore` template for `.pi/kanban.json`.
+- A push channel for the board (the revision poll is the sync) and undo; several boards per project.
