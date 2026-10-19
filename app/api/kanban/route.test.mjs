@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import test from "node:test";
 import { createJiti } from "jiti";
 import lockfile from "proper-lockfile";
@@ -282,4 +282,79 @@ test("a POST on a board from a newer schema is a 500 unsupported-schema and leav
   assert.equal(read.status, 500);
   assert.equal(read.body.code, "unsupported-schema");
   assert.equal(f.bytes(), newer);
+});
+
+/** Writes garbage where the board would live, so the next read sees it as corrupt. */
+function corruptBoard(f) {
+  fs.mkdirSync(dirname(f.path), { recursive: true });
+  fs.writeFileSync(f.path, "{ this is not json ");
+}
+
+function corruptBackups(f) {
+  return fs.readdirSync(dirname(f.path)).filter((name) => name.includes(".corrupt-"));
+}
+
+test("a create=0 GET on a corrupt file reads it as an empty board and leaves it exactly as found", async (t) => {
+  const f = fixture(t);
+  corruptBoard(f);
+  const bytes = f.bytes();
+
+  const read = await get(f.project, "&create=0");
+  assert.equal(read.status, 200);
+  assert.equal(read.body.revision, 0);
+  assert.equal(read.body.board.lanes.length, 6);
+  assert.equal(read.body.board.cards.length, 0);
+  assert.equal(f.bytes(), bytes, "a no-write read never sets the file aside");
+  assert.deepEqual(corruptBackups(f), []);
+});
+
+test("a revOnly=1 GET on a corrupt file is still a pure stat: the file's mtime, no parse, no backup", async (t) => {
+  const f = fixture(t);
+  corruptBoard(f);
+  const bytes = f.bytes();
+  const mtime = fs.statSync(f.path).mtimeMs;
+
+  const read = await get(f.project, "&revOnly=1");
+  assert.equal(read.status, 200);
+  assert.deepEqual(read.body, { revision: mtime });
+  assert.equal(f.bytes(), bytes);
+  assert.deepEqual(corruptBackups(f), []);
+});
+
+test("a creating GET on a corrupt file sets it aside and answers a fresh board", async (t) => {
+  const f = fixture(t);
+  quietWarnings(t);
+  corruptBoard(f);
+
+  const read = await get(f.project);
+  assert.equal(read.status, 200);
+  assert.equal(read.body.board.lanes.length, 6);
+  assert.equal(read.body.board.cards.length, 0);
+  assert.equal(corruptBackups(f).length, 1, "exactly one backup sibling");
+  assert.equal(f.file().schemaVersion, 1, "the new file is a valid board");
+});
+
+test("a POST on a corrupt file sets it aside, applies the action to a fresh board, and has no corrupt flag of its own", async (t) => {
+  const f = fixture(t);
+  quietWarnings(t);
+  corruptBoard(f);
+
+  const added = await post({ cwd: f.project, action: "add-card", laneId: "lane-todo", title: "After the mess" });
+  assert.equal(added.status, 200);
+  assert.equal(added.body.board.cards.length, 1);
+  assert.equal(added.body.board.cards[0].title, "After the mess");
+  assert.deepEqual(Object.keys(added.body).sort(), ["board", "revision"], "the response shape never gained a flag");
+  assert.equal(corruptBackups(f).length, 1);
+  assert.equal(f.file().board.cards.length, 1);
+});
+
+test("a POST whose cwd is an existing regular file is a 400 cwd-not-directory", async (t) => {
+  const f = fixture(t);
+  const file = join(f.project, "a-file.txt");
+  fs.writeFileSync(file, "x");
+
+  const denied = await post({ cwd: file, action: "add-card", laneId: "lane-todo", title: "X" });
+  assert.equal(denied.status, 400);
+  assert.equal(denied.body.code, "cwd-not-directory");
+  assert.ok(!f.exists(), "a non-directory cwd cannot start a board");
 });
