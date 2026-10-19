@@ -266,3 +266,25 @@ Three insertion points, all verified at `tsc`-time against the current file:
 The returned `extensions` array is consumed at line 474 in the CLI's order;
 the new entry appends last. Chat-only sessions load no built-ins at all, so
 they stay tool-less with zero changes.
+
+## Demo-entry removals (verified census)
+
+Exactly these, and nothing else, leaves the UI:
+
+- `components/KanbanBoard.tsx` card menu: the `if (next)` block pushing
+  `{ id: "advance", label: t("kanban.menuAdvance", …), dim, icon,
+  onSelect: kanbanAdvanceCard + setHighlightFlash }` (around line 1363).
+  The `next` lane variable exists only for this block.
+- `components/KanbanLaneStrip.tsx`: the `onDemoAdvance` prop (interface
+  line 29, destructuring line 49), the `nextLane` computation (line 64),
+  and the `if (nextLane)` menu block (lines 86–92).
+- `components/AppShell.tsx` line 1403: the `onDemoAdvance={() => …}` prop
+  passed to the strip.
+- One label line per locale, all at line 1510:
+  `lib/i18n/messages/en.ts` (`"Demo: advance to {lane}"` — the only literal
+  `Demo:` string in i18n; the zh values are 示範/演示),
+  `lib/i18n/messages/zh-CN.ts`, `lib/i18n/messages/zh-TW.ts`.
+
+Test case 7's "no `Demo:` string anywhere in lib/i18n" is therefore a
+single-line census after the removal, and the key-count parity (53 keys
+each) keeps i18n test 8 green.
