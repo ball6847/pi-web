@@ -519,3 +519,13 @@ export function kanbanCreateCardForSession(projectDir: string | null, sessionId:
 export function acquireBoardWatcherForTests(key: string, creating = false): () => void {
   return acquire(key, creating);
 }
+
+/**
+ * The board a `useKanbanBoard` subscriber would see, without a renderer:
+ * `adopt` keeps the old object when a refetch's JSON is identical, so this
+ * reference is stable across an unchanged poll — export it so node tests can
+ * pin that rule (the store's resetKanbanStateForTests pattern).
+ */
+export function kanbanBoardSnapshotForTests(projectDir: string): KanbanBoard | null {
+  return entries.get(projectDir)?.board ?? null;
+}
