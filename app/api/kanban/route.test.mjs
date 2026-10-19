@@ -358,3 +358,121 @@ test("a POST whose cwd is an existing regular file is a 400 cwd-not-directory", 
   assert.equal(denied.body.code, "cwd-not-directory");
   assert.ok(!f.exists(), "a non-directory cwd cannot start a board");
 });
+
+test("a move-card with a session jumps to any work lane but never into the backlog", async (t) => {
+  const f = fixture(t);
+  fabricateSession(f.agentDir, f.project, "mv-1");
+  await get(f.project);
+
+  const created = await post({ cwd: f.project, action: "create-card-for-session", sessionId: "mv-1", sessionTitle: "MV", laneId: "lane-todo" });
+  assert.equal(created.status, 200);
+  const card = created.body.board.cards.find((c) => c.sessionId === "mv-1");
+  assert.ok(card);
+
+  const jumped = await post({ cwd: f.project, action: "move-card", cardId: card.id, laneId: "lane-deploy" });
+  assert.equal(jumped.status, 200);
+  assert.equal(jumped.body.board.cards.find((c) => c.id === card.id).laneId, "lane-deploy");
+
+  const toBacklog = await post({ cwd: f.project, action: "move-card", cardId: card.id, laneId: "lane-backlog" });
+  assert.equal(toBacklog.status, 400);
+  assert.equal(toBacklog.body.code, "refused");
+  assert.equal(jumped.body.board.cards.find((c) => c.id === card.id).laneId, f.file().board.cards.find((c) => c.id === card.id).laneId);
+});
+
+test("create-card-for-session is idempotent per session, and unlink keeps the snapshot title", async (t) => {
+  const f = fixture(t);
+  fabricateSession(f.agentDir, f.project, "un-1");
+  await get(f.project);
+
+  const first = await post({ cwd: f.project, action: "create-card-for-session", sessionId: "un-1", sessionTitle: "Same title" });
+  assert.equal(first.status, 200);
+  assert.equal(first.body.board.cards.length, 1);
+  assert.equal(first.body.board.cards[0].laneId, "lane-todo", "a null lane lands in the first work lane");
+
+  // Same title again: the reducer returns the same board, so nothing is written.
+  const again = await post({ cwd: f.project, action: "create-card-for-session", sessionId: "un-1", sessionTitle: "Same title" });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.revision, first.body.revision, "an unchanged board is not rewritten");
+  assert.equal(again.body.board.cards.length, 1);
+
+  // A new title updates the snapshot instead of adding a card.
+  const retitled = await post({ cwd: f.project, action: "create-card-for-session", sessionId: "un-1", sessionTitle: "New title" });
+  assert.equal(retitled.status, 200);
+  assert.equal(retitled.body.board.cards.length, 1);
+  assert.equal(retitled.body.board.cards[0].sessionTitle, "New title");
+
+  const unlinked = await post({ cwd: f.project, action: "unlink-session", cardId: retitled.body.board.cards[0].id });
+  assert.equal(unlinked.status, 200);
+  const card = unlinked.body.board.cards[0];
+  assert.equal(card.sessionId, null);
+  assert.equal(card.sessionTitle, "New title", "the snapshot survives the unlink");
+});
+
+test("lane operations: add (client id, dup id refused), rename (backlog refused), move (edges refused), delete relocates cards", async (t) => {
+  const f = fixture(t);
+  await get(f.project);
+
+  const added = await post({ cwd: f.project, action: "add-lane", name: "Ship", laneId: "lane-ship" });
+  assert.equal(added.status, 200);
+  assert.equal(added.body.board.lanes.length, 7);
+  assert.equal(added.body.board.lanes[6].id, "lane-ship");
+
+  const dupId = await post({ cwd: f.project, action: "add-lane", name: "Shipped", laneId: "lane-ship" });
+  assert.equal(dupId.status, 400);
+  assert.equal(dupId.body.code, "refused");
+
+  const renameBacklog = await post({ cwd: f.project, action: "rename-lane", laneId: "lane-backlog", name: "Inbox" });
+  assert.equal(renameBacklog.status, 400);
+  assert.equal(renameBacklog.body.code, "refused");
+
+  const renamed = await post({ cwd: f.project, action: "rename-lane", laneId: "lane-plan", name: "Planned" });
+  assert.equal(renamed.status, 200);
+  assert.equal(renamed.body.board.lanes.find((l) => l.id === "lane-plan").name, "Planned");
+
+  const moved = await post({ cwd: f.project, action: "move-lane", laneId: "lane-plan", direction: -1 });
+  assert.equal(moved.status, 200);
+  assert.deepEqual(moved.body.board.lanes.map((l) => l.id), ["lane-backlog", "lane-plan", "lane-todo", "lane-implement", "lane-deploy", "lane-done", "lane-ship"]);
+
+  const pastEnd = await post({ cwd: f.project, action: "move-lane", laneId: "lane-ship", direction: 1 });
+  assert.equal(pastEnd.status, 400);
+  assert.equal(pastEnd.body.code, "refused");
+
+  const badDirection = await post({ cwd: f.project, action: "move-lane", laneId: "lane-plan", direction: 0 });
+  assert.equal(badDirection.status, 400);
+  assert.equal(badDirection.body.code, "invalid-request");
+
+  const backlogMove = await post({ cwd: f.project, action: "move-lane", laneId: "lane-backlog", direction: 1 });
+  assert.equal(backlogMove.status, 400);
+  assert.equal(backlogMove.body.code, "refused");
+
+  // A card in the lane being deleted is relocated to the backlog, unlinked.
+  const carded = await post({ cwd: f.project, action: "add-card", laneId: "lane-ship", title: "Ships", description: "d" });
+  assert.equal(carded.status, 200);
+  const deleted = await post({ cwd: f.project, action: "delete-lane", laneId: "lane-ship" });
+  assert.equal(deleted.status, 200);
+  assert.ok(!deleted.body.board.lanes.some((l) => l.id === "lane-ship"));
+  const relocated = deleted.body.board.cards.find((c) => c.title === "Ships");
+  assert.equal(relocated.laneId, "lane-backlog");
+  assert.equal(relocated.sessionId, null);
+});
+
+test("edit-card: title and description update, neither is an invalid request, an unknown card is refused", async (t) => {
+  const f = fixture(t);
+  await get(f.project);
+  const added = await post({ cwd: f.project, action: "add-card", laneId: "lane-backlog", title: "Old", description: "old text" });
+  assert.equal(added.status, 200);
+  const card = added.body.board.cards[0];
+
+  const edited = await post({ cwd: f.project, action: "edit-card", cardId: card.id, title: "New", description: "new text" });
+  assert.equal(edited.status, 200);
+  assert.equal(edited.body.board.cards[0].title, "New");
+  assert.equal(edited.body.board.cards[0].description, "new text");
+
+  const neither = await post({ cwd: f.project, action: "edit-card", cardId: card.id });
+  assert.equal(neither.status, 400);
+  assert.equal(neither.body.code, "invalid-request");
+
+  const unknown = await post({ cwd: f.project, action: "edit-card", cardId: "nope", title: "X" });
+  assert.equal(unknown.status, 400);
+  assert.equal(unknown.body.code, "refused");
+});
