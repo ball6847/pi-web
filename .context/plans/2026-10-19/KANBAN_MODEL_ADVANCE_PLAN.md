@@ -242,3 +242,27 @@ export function buildKanbanAdvanceTool(ctx: ExtensionContext) {
   });
 }
 ```
+
+## Registration (verified against lib/builtin-extensions.ts)
+
+Three insertion points, all verified at `tsc`-time against the current file:
+
+1. `BUILTIN_EXTENSION_NAMES` (line 229) gains the new name (e.g.
+   `kanban-advance`). The switch reader already loops that list, so the
+   `-builtin:kanban-advance` / `!builtin:kanban-advance` settings switches
+   work with no further plumbing; a disabled entry stays as
+   `unavailableExtension` (an empty factory), which is exactly the
+   opt-out semantics.
+2. Inside `createPiWebBuiltinExtensions`, the `extensions` array (tool-search
+   and mcp, from line 370 on) gains
+   `builtin("kanban-advance", gate("kanban-advance", createKanbanAdvanceExtension()))`
+   — gated like the other two, so it is on by default and switchable off.
+3. `createKanbanAdvanceExtension(): InlineExtension` is a `setup(pi)` that
+   calls `pi.registerTool(defineTool(...))` once with the draft's tool (the
+   draft's factory-`ctx` parameter is unused: the per-call `ctx` in
+   `execute` already carries `cwd` and `sessionManager`). Model: the
+   subagent built-in's `setup` (line 183 of lib/subagent-extension.ts).
+
+The returned `extensions` array is consumed at line 474 in the CLI's order;
+the new entry appends last. Chat-only sessions load no built-ins at all, so
+they stay tool-less with zero changes.
