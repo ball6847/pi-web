@@ -12,12 +12,13 @@
 // board's own controls optimistically); this view shows it, with a placeholder
 // while it loads and a retry banner when a load or a write failed.
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { SpinnerIcon } from "./SidebarIcons";
 import { useKanbanCardDrag } from "@/hooks/useKanbanCardDrag";
+import { useKanbanLaneDrag } from "@/hooks/useKanbanLaneDrag";
 import { listenForStackedDialogEscape } from "@/lib/stacked-dialog";
 import type { SessionInfo } from "@/lib/types";
 import {
@@ -34,6 +35,7 @@ import {
   kanbanLinkCard,
   kanbanMoveCard,
   kanbanMoveLane,
+  kanbanReorderLane,
   kanbanRenameLane,
   kanbanUnlinkCard,
   kanbanUpdateCard,
@@ -915,6 +917,8 @@ function LaneColumn({
   dragSourceCardId,
   onCardPointerDown,
   onCardTouchMove,
+  laneDragging,
+  onLaneHeaderPointerDown,
 }: {
   board: KanbanBoardData;
   projectDir: string;
@@ -943,6 +947,9 @@ function LaneColumn({
   dragSourceCardId: string | null;
   onCardPointerDown(event: ReactPointerEvent<HTMLElement>, cardId: string): void;
   onCardTouchMove(event: TouchEvent): void;
+  /** The column is the lane drag's source: it dims while the ghost follows the pointer. */
+  laneDragging: boolean;
+  onLaneHeaderPointerDown(event: ReactPointerEvent<HTMLElement>, lane: KanbanLane): void;
 }) {
   const { t } = useI18n();
   const cards = cardsOfLane(board, lane.id);
@@ -967,7 +974,8 @@ function LaneColumn({
         cursor: invalid ? "no-drop" : undefined,
         borderRadius: 10,
         overflow: "hidden",
-        transition: "border-color 0.12s, background 0.12s",
+        opacity: laneDragging ? 0.4 : 1,
+        transition: "border-color 0.12s, background 0.12s, opacity 0.12s",
       }}
     >
       <header style={{
@@ -976,13 +984,20 @@ function LaneColumn({
         flexDirection: "column",
         borderBottom: "1px solid var(--border)",
       }}>
-        <div style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          padding: "0 10px",
-          height: 34,
-        }}>
+        <div
+          onPointerDown={(event) => {
+            // The header's buttons (add card) are not the lane drag's handle.
+            if (event.target instanceof Element && event.target.closest("button")) return;
+            onLaneHeaderPointerDown(event, lane);
+          }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "0 10px",
+            height: 34,
+            cursor: lane.fixed ? undefined : "grab",
+          }}>
         {lane.fixed && (
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
@@ -1076,6 +1091,90 @@ function LaneColumn({
   );
 }
 
+// -- lane drag visuals ---------------------------------------------------------
+
+/** The six-dot grip: a lane row's drag handle in the config dialog. */
+function GripIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="9" cy="6" r="1.7" /><circle cx="15" cy="6" r="1.7" />
+      <circle cx="9" cy="12" r="1.7" /><circle cx="15" cy="12" r="1.7" />
+      <circle cx="9" cy="18" r="1.7" /><circle cx="15" cy="18" r="1.7" />
+    </svg>
+  );
+}
+
+/** The accent line where a lane drag will land: horizontal, between the dialog's rows. */
+function LaneDropLine() {
+  return (
+    <div
+      style={{
+        flexShrink: 0,
+        height: 3,
+        margin: "1px 2px",
+        borderRadius: 2,
+        background: "var(--accent)",
+        boxShadow: "0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent)",
+      }}
+    />
+  );
+}
+
+/** The accent line where a lane drag will land: vertical, between the board's columns. */
+function ColumnDropLine() {
+  return (
+    <div
+      style={{
+        flex: "0 0 auto",
+        width: 3,
+        alignSelf: "stretch",
+        margin: "6px 0",
+        borderRadius: 2,
+        background: "var(--accent)",
+        boxShadow: "0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent)",
+      }}
+    />
+  );
+}
+
+/** The floating lane label a drag lifts: it follows the pointer through its style, not state. */
+function LaneDragGhost({ label, count, ghostRef }: { label: string; count: number; ghostRef: React.RefObject<HTMLDivElement | null> }) {
+  return createPortal(
+    <div
+      ref={ghostRef as React.RefObject<HTMLDivElement>}
+      style={{
+        position: "fixed",
+        left: 0,
+        top: 0,
+        zIndex: 700,
+        pointerEvents: "none",
+        transform: "translate(-500px, -500px)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          maxWidth: 220,
+          padding: "5px 10px",
+          background: "var(--bg-panel)",
+          border: "1px solid var(--accent)",
+          borderRadius: 8,
+          boxShadow: "0 12px 28px rgba(0,0,0,0.2)",
+        }}
+      >
+        <span style={{ color: "var(--text-dim)", display: "inline-flex" }} aria-hidden="true"><GripIcon /></span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+        {count > 0 && (
+          <span style={{ fontSize: 10, color: "var(--text-muted)", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{count}</span>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // -- lane configuration ----------------------------------------------------------
 
 function LaneConfig({
@@ -1092,6 +1191,27 @@ function LaneConfig({
   const { t } = useI18n();
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const [newName, setNewName] = useState("");
+
+  // Drag reordering: a row's grip lifts it, the accent line shows where the
+  // lane will land (never past the fixed backlog), and the up/down buttons
+  // keep the same job for the keyboard. Touch holds the grip 350 ms first,
+  // so a swipe still scrolls the dialog.
+  const rowListRef = useRef<HTMLDivElement | null>(null);
+  const laneDrag = useKanbanLaneDrag({
+    laneIds: board.lanes.map((l) => l.id),
+    elementOf: (id) => rowListRef.current?.querySelector<HTMLElement>(`[data-kanban-config-row="${CSS.escape(id)}"]`) ?? null,
+    axis: "y",
+    allowTouch: true,
+    scrollElement: () => rowListRef.current,
+    onReorder: (laneId, toIndex) => {
+      kanbanReorderLane(projectDir, laneId, toIndex);
+    },
+  });
+  const dragIndex = laneDrag.view.draggingLaneId ? board.lanes.findIndex((l) => l.id === laneDrag.view.draggingLaneId) : -1;
+  const lineBefore = laneDrag.view.dropIndex !== null && dragIndex >= 0
+    ? (laneDrag.view.dropIndex <= dragIndex ? laneDrag.view.dropIndex : laneDrag.view.dropIndex + 1)
+    : null;
+  const dragLane = laneDrag.view.draggingLaneId ? board.lanes.find((l) => l.id === laneDrag.view.draggingLaneId) ?? null : null;
 
   useEffect(() => {
     const stop = listenForStackedDialogEscape(document, onClose);
@@ -1140,19 +1260,27 @@ function LaneConfig({
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
           </button>
         </div>
-        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div
+          ref={rowListRef}
+          style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 6 }}
+        >
           {board.lanes.map((lane, index) => (
-            <ConfigLaneRow
-              key={lane.id}
-              lane={lane}
-              index={index}
-              count={cardCount(lane.id)}
-              onMoveUp={() => kanbanMoveLane(projectDir, lane.id, -1)}
-              onMoveDown={() => kanbanMoveLane(projectDir, lane.id, 1)}
-              onRename={(name) => kanbanRenameLane(projectDir, lane.id, name)}
-              onDelete={() => kanbanDeleteLane(projectDir, lane.id)}
-            />
+            <Fragment key={lane.id}>
+              {lineBefore === index && <LaneDropLine />}
+              <ConfigLaneRow
+                lane={lane}
+                index={index}
+                count={cardCount(lane.id)}
+                dragged={laneDrag.view.draggingLaneId === lane.id}
+                onGripPointerDown={(event) => laneDrag.beginDrag(event, lane.id)}
+                onMoveUp={() => kanbanMoveLane(projectDir, lane.id, -1)}
+                onMoveDown={() => kanbanMoveLane(projectDir, lane.id, 1)}
+                onRename={(name) => kanbanRenameLane(projectDir, lane.id, name)}
+                onDelete={() => kanbanDeleteLane(projectDir, lane.id)}
+              />
+            </Fragment>
           ))}
+          {lineBefore === board.lanes.length && <LaneDropLine />}
           <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
             <input
               value={newName}
@@ -1200,6 +1328,13 @@ function LaneConfig({
           <p style={{ margin: "10px 0 0", fontSize: 11, lineHeight: 1.6, color: "var(--text-dim)" }}>{t("kanban.configureNote")}</p>
         </div>
       </div>
+      {dragLane && (
+        <LaneDragGhost
+          label={dragLane.name}
+          count={cardCount(dragLane.id)}
+          ghostRef={laneDrag.view.ghostRef}
+        />
+      )}
     </div>,
     document.body,
   );
@@ -1209,6 +1344,8 @@ function ConfigLaneRow({
   lane,
   index,
   count,
+  dragged,
+  onGripPointerDown,
   onMoveUp,
   onMoveDown,
   onRename,
@@ -1217,6 +1354,9 @@ function ConfigLaneRow({
   lane: KanbanLane;
   index: number;
   count: number;
+  /** The row is the drag's source: it dims while the ghost follows the pointer. */
+  dragged: boolean;
+  onGripPointerDown(event: ReactPointerEvent<HTMLDivElement>): void;
   onMoveUp(): void;
   onMoveDown(): void;
   onRename(name: string): void;
@@ -1228,7 +1368,50 @@ function ConfigLaneRow({
   const upDisabled = index === 0 || lane.fixed;
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", border: "1px solid var(--border)", borderRadius: 8, background: "var(--bg)" }}>
+    <div
+      data-kanban-config-row={lane.id}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "4px 8px",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        background: "var(--bg)",
+        opacity: dragged ? 0.35 : 1,
+        transition: "opacity 0.12s",
+      }}
+    >
+      {lane.fixed ? (
+        <span style={{ flexShrink: 0, width: 14, display: "grid", placeItems: "center", color: "var(--text-dim)" }} aria-hidden="true">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
+          </svg>
+        </span>
+      ) : (
+        <div
+          role="button"
+          aria-label={`${t("kanban.configureDrag")} — ${lane.name}`}
+          title={t("kanban.configureDrag")}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            onGripPointerDown(event);
+          }}
+          style={{
+            flexShrink: 0,
+            width: 14,
+            height: 18,
+            display: "grid",
+            placeItems: "center",
+            cursor: "grab",
+            touchAction: "none",
+            color: "var(--text-dim)",
+            borderRadius: 3,
+          }}
+        >
+          <GripIcon />
+        </div>
+      )}
       <GhostButton width={20} size={11} disabled={upDisabled} title={t("kanban.configureMoveUp")} ariaLabel={`${t("kanban.configureMoveUp")} — ${lane.name}`} onClick={(e) => { e.stopPropagation(); onMoveUp(); }} icon={
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15" /></svg>
       } />
@@ -1236,12 +1419,7 @@ function ConfigLaneRow({
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9" /></svg>
       } />
       {lane.fixed ? (
-        <>
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
-          </svg>
-          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", flex: 1 }}>{lane.name}</span>
-        </>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", flex: 1 }}>{lane.name}</span>
       ) : (
         <input
           value={draft}
@@ -1289,8 +1467,6 @@ function ConfigLaneRow({
     </div>
   );
 }
-
-// -- board -----------------------------------------------------------------------
 
 function BoardNotice({ error, onRetry }: { error: string; onRetry(): void }) {
   const { t } = useI18n();
@@ -1393,6 +1569,27 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
   const boardRef = useRef<HTMLDivElement | null>(null);
   const rowRef = useRef<HTMLDivElement | null>(null);
   const ghostRef = useRef<HTMLDivElement | null>(null);
+  // The lane drag reorders the columns: a column header is the handle, the
+  // accent line shows where the lane will land (never past the fixed
+  // backlog), and the release posts reorder-lane.
+  const laneDrag = useKanbanLaneDrag({
+    laneIds: board.lanes.map((l) => l.id),
+    // The columns carry data-kanban-lane (the card drag hit-tests it too).
+    elementOf: (id) => rowRef.current?.querySelector<HTMLElement>(`[data-kanban-lane="${CSS.escape(id)}"]`) ?? null,
+    axis: "x",
+    scrollElement: () => rowRef.current,
+    onReorder: (laneId, toIndex) => {
+      kanbanReorderLane(projectDir, laneId, toIndex);
+    },
+  });
+  const laneDragIndex = laneDrag.view.draggingLaneId ? board.lanes.findIndex((l) => l.id === laneDrag.view.draggingLaneId) : -1;
+  // The line for final index `to` sits before the original column `to` when
+  // the drag starts to its right, and before column `to + 1` when to its left
+  // (`to + 1 === lanes.length` = after the last column).
+  const laneLineBefore = laneDrag.view.dropIndex !== null && laneDragIndex >= 0
+    ? (laneDrag.view.dropIndex <= laneDragIndex ? laneDrag.view.dropIndex : laneDrag.view.dropIndex + 1)
+    : null;
+  const laneDragLane = laneDrag.view.draggingLaneId ? board.lanes.find((l) => l.id === laneDrag.view.draggingLaneId) ?? null : null;
   // A brief accent ring on the card right after it moves.
   const [flashId, setFlashId] = useState<string | null>(null);
   const setHighlightFlash = useCallback((cardId: string) => {
@@ -1666,8 +1863,9 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
           const dragCard = dragView ? board.cards.find((c) => c.id === dragView.cardId) : undefined;
           const dragInvalid = dragView !== null && dragCard !== undefined && lane.id !== dragCard.laneId && !canRestInLane(dragCard, lane);
           return (
+          <Fragment key={lane.id}>
+            {laneLineBefore === laneIndex && <ColumnDropLine />}
           <LaneColumn
-            key={lane.id}
             board={board}
             projectDir={projectDir}
             lane={lane}
@@ -1690,9 +1888,13 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
             dragSourceCardId={dragView?.phase === "dragging" ? dragView.cardId : null}
             onCardPointerDown={drag.handlers.onPointerDown}
             onCardTouchMove={drag.handlers.onTouchMove}
+            laneDragging={laneDrag.view.draggingLaneId === lane.id}
+            onLaneHeaderPointerDown={(event, l) => laneDrag.beginDrag(event, l.id)}
           />
+          </Fragment>
           );
         })}
+        {laneLineBefore === board.lanes.length && <ColumnDropLine />}
         {!(mobile && activeMobileLane) && (
           <button
             type="button"
@@ -1724,6 +1926,13 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
           display: dragView?.phase === "dragging" ? "block" : "none",
         }}
       />
+      {laneDragLane && (
+        <LaneDragGhost
+          label={laneDragLane.name}
+          count={cardsOfLane(board, laneDragLane.id).length}
+          ghostRef={laneDrag.view.ghostRef}
+        />
+      )}
       {configOpen && <LaneConfig board={board} projectDir={projectDir} projectName={projectName} onClose={() => setConfigOpen(false)} />}
       {menuFor && menuCard && (
         <CardMenu anchor={menuFor.anchor} entries={menuEntries} ignoreOutsideUntil={menuFor.ignoreOutsideUntil ?? 0} onClose={() => setMenuFor(null)} />

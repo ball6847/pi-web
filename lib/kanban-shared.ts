@@ -275,6 +275,25 @@ export function moveLane(board: KanbanBoard, laneId: string, direction: -1 | 1):
 }
 
 /**
+ * Moves a work lane to a final position. `toIndex` is the lane's index in the
+ * lanes array AFTER the move: 0 belongs to the fixed backlog, so a 0 asked
+ * for lands right after it (like a too-far index, clamped to the end).
+ * Refused (null) for an unknown lane, the fixed backlog, or a non-integer
+ * index; the same position changes nothing.
+ */
+export function reorderLane(board: KanbanBoard, laneId: string, toIndex: number): KanbanBoard | null {
+  const from = laneIndex(board, laneId);
+  const lane = board.lanes[from];
+  if (from < 0 || !lane || lane.fixed) return null;
+  if (!Number.isInteger(toIndex)) return null;
+  const target = Math.min(Math.max(toIndex, 1), board.lanes.length - 1);
+  if (target === from) return board;
+  const lanes = board.lanes.filter((l) => l.id !== laneId);
+  lanes.splice(target, 0, lane);
+  return { ...board, lanes };
+}
+
+/**
  * Removes a work lane. Its cards are relocated to the backlog, which holds no
  * session: a card that carried one is unlinked (the snapshot title stays).
  * Refused (null) for an unknown lane or the fixed backlog.
@@ -326,6 +345,8 @@ export function applyKanbanAction(board: KanbanBoard, request: KanbanAction, now
       return renameLane(board, request.laneId, request.name);
     case "move-lane":
       return moveLane(board, request.laneId, request.direction);
+    case "reorder-lane":
+      return reorderLane(board, request.laneId, request.toIndex);
     case "delete-lane":
       return deleteLane(board, request.laneId, now);
   }
