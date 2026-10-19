@@ -495,6 +495,12 @@ export function kanbanAdvanceCard(projectDir: string | null, cardId: string): Ka
   const card = next?.cards.find((c) => c.id === cardId);
   return next && card ? laneById(next, card.laneId) : null;
 }
+/** The user's call: the card goes to `laneId`, last in it. Null when the rules refuse (or the board is not loaded). */
+export function kanbanMoveCard(projectDir: string | null, cardId: string, laneId: string): KanbanLane | null {
+  const next = mutate(projectDir, { action: "move-card", cardId, laneId });
+  const card = next?.cards.find((c) => c.id === cardId);
+  return next && card ? laneById(next, card.laneId) : null;
+}
 /**
  * A session that started "tracked on board": a new card for it in the lane the
  * composer picked. A board not loaded yet cannot be validated locally, so the
