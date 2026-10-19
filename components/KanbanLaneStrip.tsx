@@ -9,8 +9,8 @@
 import { useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import type { KanbanBoard as KanbanBoardData, KanbanCard, KanbanLane } from "@/lib/kanban-types";
-import { laneIndex } from "@/lib/kanban-shared";
+import type { KanbanBoard as KanbanBoardData, KanbanCard, KanbanLane, KanbanNewSessionPending } from "@/lib/kanban-types";
+import { laneIndex, sessionlessCardsByRecency } from "@/lib/kanban-shared";
 import { CardMenu, type MenuEntry } from "./KanbanBoard";
 
 export interface KanbanLaneStripProps {
@@ -18,8 +18,8 @@ export interface KanbanLaneStripProps {
   board: KanbanBoardData | null;
   /** This session's card; null = untracked. */
   card: KanbanCard | null;
-  /** A fresh composer: the lane its session will start in, or null = not tracked. */
-  pendingLaneId?: string | null;
+  /** A fresh composer: what its session will do on the board once it exists (off = not tracked). */
+  pending?: KanbanNewSessionPending | null;
   isNewSession?: boolean;
   running?: boolean;
   onOpenBoard(): void;
@@ -40,7 +40,7 @@ function Chevron() {
 export function KanbanLaneStrip({
   board,
   card,
-  pendingLaneId,
+  pending,
   isNewSession,
   running,
   onOpenBoard,
@@ -55,8 +55,16 @@ export function KanbanLaneStrip({
   if (!board) return null;
 
   const currentLane = card ? laneIndex(board, card.laneId) : -1;
-  const pendingIndex = !card && pendingLaneId ? board.lanes.findIndex((l) => l.id === pendingLaneId) : -1;
-  const showPending = isNewSession && !card && pendingIndex >= 0;
+  const pendingLaneIndex = !card && pending && pending.kind !== "off"
+    ? board.lanes.findIndex((l) => l.id === (
+      pending.kind === "new-card"
+        ? pending.laneId
+        : board.cards.find((c) => c.id === pending.cardId)?.laneId
+    ))
+    : -1;
+  // The pill only highlights when the lane resolves (a pending card deleted
+  // on another device leaves just the label); the pending state itself shows.
+  const showPending = isNewSession && !card && Boolean(pending && pending.kind !== "off");
   // A fresh composer with tracking off stays quiet: no strip at all.
   if (isNewSession && !card && !showPending) return null;
 
@@ -65,12 +73,15 @@ export function KanbanLaneStrip({
 
   const statusLabel = card
     ? card.title
-    : showPending
-      ? `${t("kanban.stripPending")} — ${t("kanban.stripWillStart", { lane: board.lanes[pendingIndex].name })}`
-      : t("kanban.stripNotTracked");
+    : pending?.kind === "attach"
+      ? `${t("kanban.stripPending")} — ${t("kanban.stripPendingCard", { title: pending.cardTitle })}`
+      : showPending
+        ? `${t("kanban.stripPending")} — ${t("kanban.stripWillStart", { lane: board.lanes[pendingLaneIndex]?.name ?? "" })}`
+        : t("kanban.stripNotTracked");
 
   const workLanes = board.lanes.filter((lane) => !lane.fixed);
-  const unlinkedCards = board.cards.filter((card) => card.sessionId === null);
+  // Newest first; the menu's own filter (CardMenu shows one past 6 entries) takes it from here.
+  const unlinkedCards = sessionlessCardsByRecency(board);
   const menuEntries: MenuEntry[] = [];
   if (card) {
     menuEntries.push({
@@ -108,7 +119,7 @@ export function KanbanLaneStrip({
       label: t("kanban.stripTrackNew", { lane: workLanes[0]?.name ?? "" }),
       onSelect: () => onTrack(workLanes[0]?.id ?? null),
     });
-    for (const unlinked of unlinkedCards.slice(0, 8)) {
+    for (const unlinked of unlinkedCards) {
       menuEntries.push({
         id: `attach-${unlinked.id}`,
         label: `${t("kanban.stripTrackAttach")}: ${unlinked.title}`,
@@ -120,7 +131,7 @@ export function KanbanLaneStrip({
 
   const pill = (lane: KanbanLane, index: number) => {
     const isCurrent = card ? index === currentLane : false;
-    const isPending = !card && index === pendingIndex;
+    const isPending = !card && index === pendingLaneIndex;
     const isPast = card ? index < currentLane : false;
     let background = "none";
     let color = "var(--text-dim)";

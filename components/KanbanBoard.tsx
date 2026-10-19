@@ -3,17 +3,21 @@
 // The project's kanban board as a main-area view.
 // One board per project: the fixed backlog lane (cards with a title and a
 // description only, never a session) and the lanes the work flows through.
-// The model — not the user — moves a card to the next lane; the board's own
-// controls add, edit, link, unlink and remove cards, and configure lanes.
+// The user moves a card between lanes by dragging it (desktop) or from its
+// menu (everywhere, incl. the phone's one-lane view, where a held press
+// opens the menu); the model advances a card to the next lane when it
+// decides the stage is done. The board's other controls add, edit, link,
+// unlink and remove cards, and configure lanes.
 // The board lives on the server (lib/kanban.ts caches it and applies the
 // board's own controls optimistically); this view shows it, with a placeholder
 // while it loads and a retry banner when a load or a write failed.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { SpinnerIcon } from "./SidebarIcons";
+import { useKanbanCardDrag } from "@/hooks/useKanbanCardDrag";
 import { listenForStackedDialogEscape } from "@/lib/stacked-dialog";
 import type { SessionInfo } from "@/lib/types";
 import {
@@ -21,14 +25,14 @@ import {
   type KanbanCard,
   type KanbanLane,
 } from "@/lib/kanban-types";
-import { cardsOfLane, laneIndex } from "@/lib/kanban-shared";
+import { cardsOfLane, canRestInLane } from "@/lib/kanban-shared";
 import {
   kanbanAddCard,
   kanbanAddLane,
-  kanbanAdvanceCard,
   kanbanDeleteCard,
   kanbanDeleteLane,
   kanbanLinkCard,
+  kanbanMoveCard,
   kanbanMoveLane,
   kanbanRenameLane,
   kanbanUnlinkCard,
@@ -56,6 +60,8 @@ export interface KanbanBoardProps {
   /** The card to scroll to and ring, set when the user jumped here from the chat strip. */
   highlightCardId?: string | null;
   onOpenSession(sessionId: string, title: string): void;
+  /** Start a new session from a sessionless card: opens the composer prefilled and pre-linked. */
+  onStartSession(card: KanbanCard): void;
 }
 
 // -- shared chrome -----------------------------------------------------------
@@ -150,11 +156,14 @@ export function CardMenu({
   anchor,
   entries,
   onClose,
+  ignoreOutsideUntil = 0,
 }: {
   /** The card's ⋯ button, so the menu opens against it. */
   anchor: DOMRect;
   entries: MenuEntry[];
   onClose: () => void;
+  /** performance.now() until which an outside pointerdown must not close the menu: a long-press that opened it fires its synthetic mousedown a moment after the release. */
+  ignoreOutsideUntil?: number;
 }) {
   const [filter, setFilter] = useState("");
   const { t } = useI18n();
@@ -164,6 +173,10 @@ export function CardMenu({
   useEffect(() => {
     onCloseRef.current = onClose;
   });
+  const ignoreOutsideUntilRef = useRef(ignoreOutsideUntil);
+  useLayoutEffect(() => {
+    ignoreOutsideUntilRef.current = ignoreOutsideUntil;
+  }, [ignoreOutsideUntil]);
 
   // Keyboard entry: land on the filter (when shown) or the first item, so
   // arrow keys and Enter work from the moment the menu opens.
@@ -242,6 +255,7 @@ export function CardMenu({
       }
     };
     const onPointerDown = (event: MouseEvent) => {
+      if (performance.now() < ignoreOutsideUntilRef.current) return;
       const target = event.target as Element | null;
       if (target && target.closest?.("[data-kanban-card-menu]") === null) close();
     };
@@ -491,10 +505,13 @@ export function CardView({
   unread,
   sessionGone,
   highlighted,
+  dragSource,
   onOpenSession,
   onOpenMenu,
   onEdit,
   onOpenLinkPicker,
+  onCardPointerDown,
+  onCardTouchMove,
 }: {
   lane: KanbanLane;
   card: KanbanCard;
@@ -506,10 +523,15 @@ export function CardView({
   unread: boolean;
   sessionGone: boolean;
   highlighted: boolean;
+  /** True while this card is being dragged: it dims in place and the ghost carries it. */
+  dragSource: boolean;
   onOpenSession(sessionId: string, title: string): void;
   onOpenMenu(anchor: DOMRect, card: KanbanCard): void;
   onEdit(card: KanbanCard): void;
   onOpenLinkPicker(anchor: DOMRect, card: KanbanCard): void;
+  onCardPointerDown(event: ReactPointerEvent<HTMLElement>): void;
+  /** The board's non-passive touchmove: it holds the lane's list still once the card is picked up. */
+  onCardTouchMove(event: TouchEvent): void;
 }) {
   const { t } = useI18n();
   const ref = useRef<HTMLElement | null>(null);
@@ -517,6 +539,16 @@ export function CardView({
   useEffect(() => {
     if (highlighted) ref.current?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [highlighted]);
+
+  // React's touchmove is passive; only a native non-passive listener may
+  // preventDefault, and the lane's card list needs exactly that while a
+  // picked-up card is held.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.addEventListener("touchmove", onCardTouchMove, { passive: false });
+    return () => el.removeEventListener("touchmove", onCardTouchMove);
+  }, [onCardTouchMove]);
 
   const done = isLastLane;
   const linked = card.sessionId !== null;
@@ -537,6 +569,7 @@ export function CardView({
     <article
       ref={ref as React.RefObject<HTMLElement>}
       data-kanban-card={card.id}
+      onPointerDown={onCardPointerDown}
       onClick={() => {
         if (linked && !sessionGone && card.sessionId) onOpenSession(card.sessionId, card.sessionTitle ?? card.title);
         else if (!linked) onEdit(card);
@@ -549,9 +582,9 @@ export function CardView({
         borderRadius: 8,
         padding: "8px 10px",
         cursor: linked || !lane.fixed ? "pointer" : "default",
-        opacity: done && !running ? 0.72 : 1,
+        opacity: dragSource ? 0.45 : done && !running ? 0.72 : 1,
         boxShadow: highlighted ? "0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent)" : undefined,
-        transition: "border-color 0.15s, box-shadow 0.15s",
+        transition: "border-color 0.15s, box-shadow 0.15s, opacity 0.15s",
       }}
     >
       <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
@@ -876,6 +909,12 @@ function LaneColumn({
   onOpenLinkPicker,
   onOpenSession,
   mobile,
+  dropTarget,
+  invalid,
+  invalidReason,
+  dragSourceCardId,
+  onCardPointerDown,
+  onCardTouchMove,
 }: {
   board: KanbanBoardData;
   projectDir: string;
@@ -894,6 +933,16 @@ function LaneColumn({
   onOpenLinkPicker(anchor: DOMRect, card: KanbanCard): void;
   onOpenSession(sessionId: string, title: string): void;
   mobile: boolean;
+  /** The drag's target lane is this one: the column tints to take the drop. */
+  dropTarget: boolean;
+  /** The move-card rules refuse the card in flight for this lane: shown undroppable from pick-up. */
+  invalid: boolean;
+  /** The one-line reason shown in the lane's header while `invalid`. */
+  invalidReason: string | null;
+  /** The card in flight, while its drag is under way (dimmed in its source lane). */
+  dragSourceCardId: string | null;
+  onCardPointerDown(event: ReactPointerEvent<HTMLElement>, cardId: string): void;
+  onCardTouchMove(event: TouchEvent): void;
 }) {
   const { t } = useI18n();
   const cards = cardsOfLane(board, lane.id);
@@ -905,6 +954,7 @@ function LaneColumn({
   return (
     <section
       aria-label={lane.name}
+      data-kanban-lane={lane.id}
       style={{
         flex: "0 0 auto",
         width,
@@ -912,21 +962,27 @@ function LaneColumn({
         maxHeight: "100%",
         display: "flex",
         flexDirection: "column",
-        background: "color-mix(in srgb, var(--bg-panel) 55%, var(--bg))",
-        border: "1px solid var(--border)",
+        background: dropTarget ? "color-mix(in srgb, var(--accent) 9%, var(--bg))" : invalid ? "color-mix(in srgb, #e5484d 8%, var(--bg))" : "color-mix(in srgb, var(--bg-panel) 55%, var(--bg))",
+        border: dropTarget ? "1px solid var(--accent)" : invalid ? "1px dashed color-mix(in srgb, #e5484d 60%, transparent)" : "1px solid var(--border)",
+        cursor: invalid ? "no-drop" : undefined,
         borderRadius: 10,
         overflow: "hidden",
+        transition: "border-color 0.12s, background 0.12s",
       }}
     >
       <header style={{
         flexShrink: 0,
         display: "flex",
-        alignItems: "center",
-        gap: 6,
-        padding: "0 10px",
-        height: 34,
+        flexDirection: "column",
         borderBottom: "1px solid var(--border)",
       }}>
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "0 10px",
+          height: 34,
+        }}>
         {lane.fixed && (
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
@@ -961,8 +1017,22 @@ function LaneColumn({
             onOpenForm(lane.id, null);
           }}
         />
+        </div>
+        {invalid && (
+          <div style={{
+            padding: "0 10px 4px",
+            fontSize: 9.5,
+            lineHeight: 1.3,
+            color: "#e5484d",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}>
+            ✕ {invalidReason}
+          </div>
+        )}
       </header>
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, padding: 8 }}>
+      <div data-kanban-lane-cards style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, padding: 8 }}>
         {formHere && (
           <CardForm
             projectDir={projectDir}
@@ -986,10 +1056,13 @@ function LaneColumn({
               unread={card.sessionId !== null && unreadIds.has(card.sessionId)}
               sessionGone={sessionGone}
               highlighted={highlightCardId === card.id}
+              dragSource={dragSourceCardId === card.id}
               onOpenSession={onOpenSession}
               onOpenMenu={onOpenMenu}
               onEdit={(target) => onOpenForm(lane.id, target)}
               onOpenLinkPicker={onOpenLinkPicker}
+              onCardPointerDown={(event) => onCardPointerDown(event, card.id)}
+              onCardTouchMove={onCardTouchMove}
             />
           );
         })}
@@ -1307,7 +1380,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
 }
 
 function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; notice: React.ReactNode }) {
-  const { board, projectDir, projectName, sessions, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, highlightCardId, onOpenSession, notice } = props;
+  const { board, projectDir, projectName, sessions, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, highlightCardId, onOpenSession, onStartSession, notice } = props;
   const { t } = useI18n();
   const mobile = useIsMobile();
   const [configOpen, setConfigOpen] = useState(false);
@@ -1315,14 +1388,42 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
   // half-visible neighbour reads as a broken board. A tab strip switches lanes.
   const [mobileLaneId, setMobileLaneId] = useState<string | null>(null);
   const [formFor, setFormFor] = useState<{ laneId: string; cardId: string | null } | null>(null);
-  const [menuFor, setMenuFor] = useState<{ cardId: string; anchor: DOMRect } | null>(null);
+  const [menuFor, setMenuFor] = useState<{ cardId: string; anchor: DOMRect; ignoreOutsideUntil?: number } | null>(null);
   const [linkFor, setLinkFor] = useState<{ cardId: string; anchor: DOMRect } | null>(null);
-  // A brief accent ring on the card right after it moves (the menu's demo advance for now).
+  const boardRef = useRef<HTMLDivElement | null>(null);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const ghostRef = useRef<HTMLDivElement | null>(null);
+  // A brief accent ring on the card right after it moves.
   const [flashId, setFlashId] = useState<string | null>(null);
   const setHighlightFlash = useCallback((cardId: string) => {
     setFlashId(cardId);
     window.setTimeout(() => setFlashId((current) => (current === cardId ? null : current)), 1600);
   }, []);
+
+  // The card's drag (all lanes visible) or its held-press menu (the phone's
+  // one-lane view, where no target lane is on screen). "Move to" in the card
+  // menu is the keyboard and accessibility path for the same move-card write.
+  const drag = useKanbanCardDrag({
+    mode: mobile ? "menu" : "drag",
+    enabled: true,
+    cards: board.cards,
+    laneIds: board.lanes.map((lane) => lane.id),
+    rowRef,
+    boardRef,
+    ghostRef,
+    onMove: (cardId, laneId) => {
+      // A move the rules already refuse bounces back with no write; the
+      // lane's red marking said why during the drag.
+      const card = board.cards.find((c) => c.id === cardId);
+      const lane = board.lanes.find((l) => l.id === laneId);
+      if (!card || !lane || !canRestInLane(card, lane)) return;
+      if (kanbanMoveCard(projectDir, cardId, laneId)) setHighlightFlash(cardId);
+    },
+    onLongPress: (cardId, anchor) => {
+      const card = board.cards.find((c) => c.id === cardId);
+      if (card) setMenuFor({ cardId: card.id, anchor, ignoreOutsideUntil: performance.now() + 600 });
+    },
+  });
 
   const sessionIds = useMemo(() => new Set(sessions.map((s) => s.id)), [sessions]);
   const activeMobileLane = useMemo(() => {
@@ -1369,8 +1470,6 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
 
   const menuEntries: MenuEntry[] = useMemo(() => {
     if (!menuCard) return [];
-    const index = laneIndex(board, menuCard.laneId);
-    const next = board.lanes[index + 1] ?? null;
     const sessionGone = menuCard.sessionId !== null && !sessionIds.has(menuCard.sessionId);
     const entries: MenuEntry[] = [];
     if (menuCard.sessionId) {
@@ -1391,6 +1490,12 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
     } else {
       const backlogLane = board.lanes.find((l) => l.id === menuCard.laneId)?.fixed;
       entries.push({
+        id: "start",
+        label: t("kanban.menuStartSession"),
+        icon: <ChatIcon />,
+        onSelect: () => onStartSession(menuCard),
+      });
+      entries.push({
         id: "link",
         label: t("kanban.menuLink"),
         icon: <LinkIcon />,
@@ -1406,19 +1511,25 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
       label: t("kanban.menuEdit"),
       onSelect: () => openForm(menuCard.laneId, menuCard),
     });
-    if (next) {
+    // "Move to {lane}" for every other lane: the accessible (and keyboard)
+    // counterpart of the drag. The board's rules gate the entries — a
+    // sessionless card only rests in the backlog, a card with a session never does.
+    const unlinked = menuCard.sessionId === null;
+    for (const lane of board.lanes) {
+      if (lane.id === menuCard.laneId) continue;
+      const refused = unlinked ? !lane.fixed : lane.fixed;
       entries.push({
-        id: "advance",
-        label: t("kanban.menuAdvance", { lane: next.name }),
-        dim: true,
+        id: `move-${lane.id}`,
+        label: t("kanban.menuMoveTo", { lane: lane.name }),
+        disabled: refused,
+        disabledTitle: refused ? (unlinked ? t("kanban.menuMoveToSessionless") : t("kanban.backlogNoSessions")) : undefined,
         icon: (
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
           </svg>
         ),
         onSelect: () => {
-          const moved = kanbanAdvanceCard(projectDir, menuCard.id);
-          if (moved) setHighlightFlash(menuCard.id);
+          if (kanbanMoveCard(projectDir, menuCard.id, lane.id)) setHighlightFlash(menuCard.id);
         },
       });
     }
@@ -1432,10 +1543,17 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
       },
     });
     return entries;
-  }, [menuCard, board, sessionIds, sessionOptions, menuFor, projectDir, t, onOpenSession, openForm, setHighlightFlash]);
+  }, [menuCard, board, sessionIds, sessionOptions, menuFor, projectDir, t, onOpenSession, onStartSession, openForm, setHighlightFlash]);
+
+  const dragView = drag.view;
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg)", minWidth: 0 }}>
+    <div
+      ref={boardRef}
+      onClickCapture={drag.onClickCapture}
+      onPointerDownCapture={drag.onPointerDownCapture}
+      style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg)", minWidth: 0, position: "relative" }}
+    >
       <style>{`
         @keyframes kanban-card-in {
           from { opacity: 0; transform: translateY(3px); }
@@ -1528,6 +1646,7 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
         </div>
       )}
       <div
+        ref={rowRef}
         style={{
           flex: 1,
           minHeight: 0,
@@ -1541,6 +1660,11 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
       >
         {board.lanes.filter((lane) => !mobile || lane.id === activeMobileLane).map((lane) => {
           const laneIndex = board.lanes.findIndex((l) => l.id === lane.id);
+          // From pick-up, every lane the move-card rules refuse for the card
+          // in flight shows itself undroppable (the source lane excepted —
+          // dropping back is a no-op, not a refusal).
+          const dragCard = dragView ? board.cards.find((c) => c.id === dragView.cardId) : undefined;
+          const dragInvalid = dragView !== null && dragCard !== undefined && lane.id !== dragCard.laneId && !canRestInLane(dragCard, lane);
           return (
           <LaneColumn
             key={lane.id}
@@ -1560,6 +1684,12 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
             onOpenLinkPicker={openLink}
             onOpenSession={onOpenSession}
             mobile={mobile}
+            dropTarget={dragView !== null && dragView.phase === "dragging" && dragView.laneId === lane.id && !dragInvalid}
+            invalid={dragInvalid}
+            invalidReason={dragInvalid && dragCard ? (dragCard.sessionId === null ? t("kanban.menuMoveToSessionless") : t("kanban.backlogNoSessions")) : null}
+            dragSourceCardId={dragView?.phase === "dragging" ? dragView.cardId : null}
+            onCardPointerDown={drag.handlers.onPointerDown}
+            onCardTouchMove={drag.handlers.onTouchMove}
           />
           );
         })}
@@ -1584,9 +1714,19 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
           </button>
         )}
       </div>
+      {/* The dragged card's clone lives here: the drag hook fills and moves it. */}
+      <div
+        ref={ghostRef}
+        style={{
+          position: "absolute",
+          zIndex: 660,
+          pointerEvents: "none",
+          display: dragView?.phase === "dragging" ? "block" : "none",
+        }}
+      />
       {configOpen && <LaneConfig board={board} projectDir={projectDir} projectName={projectName} onClose={() => setConfigOpen(false)} />}
       {menuFor && menuCard && (
-        <CardMenu anchor={menuFor.anchor} entries={menuEntries} onClose={() => setMenuFor(null)} />
+        <CardMenu anchor={menuFor.anchor} entries={menuEntries} ignoreOutsideUntil={menuFor.ignoreOutsideUntil ?? 0} onClose={() => setMenuFor(null)} />
       )}
       {linkFor && linkCard && (
         <SessionPicker
