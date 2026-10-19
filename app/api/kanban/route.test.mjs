@@ -476,3 +476,22 @@ test("edit-card: title and description update, neither is an invalid request, an
   assert.equal(unknown.status, 400);
   assert.equal(unknown.body.code, "refused");
 });
+
+test("a revOnly=1 GET passes an untrusted host: a pure stat, like create=0, and never writes", async (t) => {
+  const f = fixture(t);
+  await get(f.project);
+  const bytesBefore = f.bytes();
+  const trusted = await get(f.project, "&revOnly=1");
+  assert.equal(trusted.status, 200);
+
+  const untrusted = await get(f.project, "&revOnly=1", UNTRUSTED);
+  assert.equal(untrusted.status, 200);
+  assert.equal(untrusted.body.revision, trusted.body.revision);
+  assert.equal(f.bytes(), bytesBefore, "a stat never rewrites");
+
+  const bare = fixture(t);
+  const none = await get(bare.project, "&revOnly=1", UNTRUSTED);
+  assert.equal(none.status, 200);
+  assert.deepEqual(none.body, { revision: 0 });
+  assert.ok(!bare.exists(), "a stat never creates");
+});
