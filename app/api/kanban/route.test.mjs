@@ -51,6 +51,7 @@ function fixture(t, { allow = true } = {}) {
     file: () => JSON.parse(fs.readFileSync(join(project, ".pi", "kanban.json"), "utf8")),
     bytes: () => fs.readFileSync(join(project, ".pi", "kanban.json"), "utf8"),
     exists: () => fs.existsSync(join(project, ".pi", "kanban.json")),
+    stat: () => fs.statSync(join(project, ".pi", "kanban.json")),
   };
 }
 
@@ -542,4 +543,14 @@ test("a mutation prunes dead links inside its own lock: the answered board is al
   assert.equal(prunedCard.sessionId, null, "the dead link is gone from the answered board");
   assert.equal(prunedCard.sessionTitle, "Going");
   assert.equal(f.file().board.cards.find((c) => c.id === card2.id).sessionId, null);
+});
+
+test("a fresh board's bytes are exactly the canonical envelope: 2-space JSON, trailing newline, committable", async (t) => {
+  const f = fixture(t);
+  const res = await get(f.project);
+  assert.equal(res.status, 200);
+  const expected = JSON.stringify({ schemaVersion: 1, board: res.body.board }, null, 2) + "\n";
+  assert.equal(f.bytes(), expected, "the written file is the envelope re-serialized canonically");
+  assert.ok(!f.bytes().includes("undefined"));
+  assert.equal(f.stat().mode & 0o777, 0o644);
 });
