@@ -1549,16 +1549,20 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
         icon: <ChatIcon />,
         onSelect: () => onStartSession(menuCard),
       });
-      entries.push({
-        id: "link",
-        label: t("kanban.menuLink"),
-        icon: <LinkIcon />,
-        disabled: Boolean(backlogLane) || sessionOptions.length === 0,
-        disabledTitle: backlogLane ? t("kanban.backlogNoSessions") : t("kanban.cardFormSessionRequired"),
-        onSelect: () => {
-          if (menuFor) setLinkFor({ cardId: menuCard.id, anchor: menuFor.anchor });
-        },
-      });
+      // The backlog never takes a session, so linking is a dead end there —
+      // "Start session" is its cards' only path into one.
+      if (!backlogLane) {
+        entries.push({
+          id: "link",
+          label: t("kanban.menuLink"),
+          icon: <LinkIcon />,
+          disabled: sessionOptions.length === 0,
+          disabledTitle: t("kanban.cardFormSessionRequired"),
+          onSelect: () => {
+            if (menuFor) setLinkFor({ cardId: menuCard.id, anchor: menuFor.anchor });
+          },
+        });
+      }
     }
     entries.push({
       id: "edit",
