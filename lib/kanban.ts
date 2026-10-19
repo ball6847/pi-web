@@ -504,9 +504,22 @@ export function kanbanAdvanceCard(projectDir: string | null, cardId: string): Ka
   const card = next?.cards.find((c) => c.id === cardId);
   return next && card ? laneById(next, card.laneId) : null;
 }
-/** The user's call: the card goes to `laneId`, last in it. Null when the rules refuse (or the board is not loaded). */
-export function kanbanMoveCard(projectDir: string | null, cardId: string, laneId: string): KanbanLane | null {
-  const next = mutate(projectDir, { action: "move-card", cardId, laneId });
+/**
+ * The user's call: a manual move. `beforeCardId` puts the card right before
+ * that card of the target lane (the drag's drop gap, the menu's Move up / Move
+ * down); null puts it last in the lane. A move inside the card's own lane is a
+ * reorder. The shared reducer refuses what the board forbids (a sessionless
+ * card entering a work lane, a linked card entering the backlog), so a refused
+ * move never posts, and a drop where the card already was writes nothing.
+ * Returns the lane the card ends up in; null when nothing moved.
+ */
+export function kanbanMoveCard(
+  projectDir: string | null,
+  cardId: string,
+  laneId: string,
+  beforeCardId: string | null = null,
+): KanbanLane | null {
+  const next = mutate(projectDir, { action: "move-card", cardId, laneId, beforeCardId });
   const card = next?.cards.find((c) => c.id === cardId);
   return next && card ? laneById(next, card.laneId) : null;
 }

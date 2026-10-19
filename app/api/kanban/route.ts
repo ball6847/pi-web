@@ -24,7 +24,7 @@ import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security"
 // POST { cwd, action, ...payload }              → { board, revision }
 //      add-card { laneId, title, description?, sessionId?, sessionTitle?, cardId? }
 //      edit-card { cardId, title?, description? }      delete-card { cardId }
-//      move-card { cardId, laneId }                    advance-card { cardId }
+//      move-card { cardId, laneId, beforeCardId? }   advance-card { cardId }
 //      link-session { cardId, sessionId, sessionTitle } unlink-session { cardId }
 //      create-card-for-session { sessionId, sessionTitle, laneId|null, cardId? }
 //      add-lane { name, description?, laneId? }        rename-lane { laneId, name }
@@ -110,7 +110,12 @@ function readAction(body: Record<string, unknown>): KanbanAction {
     case "delete-card":
       return { action: "delete-card", cardId: required(body, "cardId", MAX_ID) };
     case "move-card":
-      return { action: "move-card", cardId: required(body, "cardId", MAX_ID), laneId: required(body, "laneId", MAX_ID) };
+      return {
+        action: "move-card",
+        cardId: required(body, "cardId", MAX_ID),
+        laneId: required(body, "laneId", MAX_ID),
+        beforeCardId: optional(body, "beforeCardId", MAX_ID) ?? null,
+      };
     case "advance-card":
       return { action: "advance-card", cardId: required(body, "cardId", MAX_ID) };
     case "link-session":

@@ -393,6 +393,44 @@ test("a move-card with a session jumps to any work lane but never into the backl
   assert.equal(jumped.body.board.cards.find((c) => c.id === card.id).laneId, f.file().board.cards.find((c) => c.id === card.id).laneId);
 });
 
+test("move-card's beforeCardId drops the card anywhere in the target lane, and a no-op move writes nothing", async (t) => {
+  const f = fixture(t);
+  fabricateSession(f.agentDir, f.project, "ord-1");
+  fabricateSession(f.agentDir, f.project, "ord-2");
+  await get(f.project);
+
+  const first = await post({ cwd: f.project, action: "create-card-for-session", sessionId: "ord-1", sessionTitle: "First", laneId: "lane-todo" });
+  const one = first.body.board.cards.find((c) => c.sessionId === "ord-1").id;
+  const second = await post({ cwd: f.project, action: "create-card-for-session", sessionId: "ord-2", sessionTitle: "Second", laneId: "lane-todo" });
+  const two = second.body.board.cards.find((c) => c.sessionId === "ord-2").id;
+  const laneOrder = () => f.file().board.cards.filter((c) => c.laneId === "lane-todo").map((c) => c.id);
+  assert.deepEqual(laneOrder(), [one, two], "new cards go last");
+
+  // Reorder inside the lane: the second card before the first.
+  const reordered = await post({ cwd: f.project, action: "move-card", cardId: two, laneId: "lane-todo", beforeCardId: one });
+  assert.equal(reordered.status, 200);
+  assert.deepEqual(laneOrder(), [two, one]);
+  const revision = reordered.body.revision;
+
+  // Dropping it in the place it already holds is a no-write: the revision stands.
+  const same = await post({ cwd: f.project, action: "move-card", cardId: two, laneId: "lane-todo", beforeCardId: one });
+  assert.equal(same.status, 200);
+  assert.equal(same.body.revision, revision);
+
+  // A cross-lane move with an anchor inserts before it, not at the lane's end.
+  const moved = await post({ cwd: f.project, action: "move-card", cardId: one, laneId: "lane-plan", beforeCardId: null });
+  assert.equal(moved.status, 200);
+  await post({ cwd: f.project, action: "move-card", cardId: two, laneId: "lane-plan", beforeCardId: one });
+  assert.deepEqual(f.file().board.cards.filter((c) => c.laneId === "lane-plan").map((c) => c.id), [two, one]);
+
+  // Shape checks: a beforeCardId that is not a string is refused before anything is written.
+  const before = JSON.stringify(f.file());
+  const bad = await post({ cwd: f.project, action: "move-card", cardId: two, laneId: "lane-plan", beforeCardId: 7 });
+  assert.equal(bad.status, 400);
+  assert.equal(bad.body.code, "invalid-request");
+  assert.equal(JSON.stringify(f.file()), before);
+});
+
 test("create-card-for-session is idempotent per session, and unlink keeps the snapshot title", async (t) => {
   const f = fixture(t);
   fabricateSession(f.agentDir, f.project, "un-1");

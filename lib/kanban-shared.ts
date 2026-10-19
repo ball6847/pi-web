@@ -30,6 +30,11 @@ export function laneIndex(board: KanbanBoard, laneId: string): number {
   return board.lanes.findIndex((lane) => lane.id === laneId);
 }
 
+/**
+ * A lane's cards in board order. A card's position inside its lane IS its
+ * position in `board.cards` (there is no position field), so a manual move or
+ * a reorder is an insertion into that one array (`placeCard`, `moveCardToLane`).
+ */
 export function cardsOfLane(board: KanbanBoard, laneId: string): KanbanCard[] {
   return board.cards.filter((card) => card.laneId === laneId);
 }
@@ -54,6 +59,32 @@ export function cardLaneOf(board: KanbanBoard, card: KanbanCard | null): KanbanL
 
 function replaceCard(board: KanbanBoard, cardId: string, change: (card: KanbanCard) => KanbanCard): KanbanBoard {
   return { ...board, cards: board.cards.map((card) => (card.id === cardId ? change(card) : card)) };
+}
+
+/**
+ * `cards` with `card` inserted into `laneId` immediately before `beforeCardId`
+ * — or, when that anchor is absent, gone, or in another lane (a concurrent
+ * writer took it), at the end of the lane.
+ */
+function placeCard(cards: KanbanCard[], card: KanbanCard, laneId: string, beforeCardId: string | null): KanbanCard[] {
+  const rest = cards.filter((c) => c.id !== card.id);
+  const anchor = beforeCardId ? rest.findIndex((c) => c.id === beforeCardId && c.laneId === laneId) : -1;
+  if (anchor >= 0) return [...rest.slice(0, anchor), card, ...rest.slice(anchor)];
+  let end = -1;
+  for (let i = 0; i < rest.length; i += 1) if (rest[i].laneId === laneId) end = i;
+  // An empty lane: the end of the array, so no other lane's order moves.
+  return end >= 0 ? [...rest.slice(0, end + 1), card, ...rest.slice(end + 1)] : [...rest, card];
+}
+
+/** Whether two card arrays give every lane the same cards in the same order (the global array is not the point). */
+function sameLaneOrder(before: KanbanCard[], after: KanbanCard[]): boolean {
+  if (before.length !== after.length) return false;
+  for (const laneId of new Set(before.map((c) => c.laneId))) {
+    const a = before.filter((c) => c.laneId === laneId);
+    const b = after.filter((c) => c.laneId === laneId);
+    if (a.length !== b.length || a.some((card, index) => card.id !== b[index].id)) return false;
+  }
+  return true;
 }
 
 /** One session, one card: every card but `exceptCardId` that carries `sessionId` drops the link (the snapshot title stays). */
@@ -133,6 +164,7 @@ export function deleteCard(board: KanbanBoard, cardId: string): KanbanBoard {
 }
 
 /**
+/**
  * Whether the move-card rules allow `card` to rest in `lane`: a sessionless
  * card only in the fixed backlog, a linked card nowhere near it. The view
  * uses it to mark undroppable lanes during a drag (the same gate
@@ -143,25 +175,39 @@ export function canRestInLane(card: KanbanCard, lane: KanbanLane): boolean {
 }
 
 /**
- * Moves a card to another lane (a lane transition; the card goes last in it).
- * Refused (null) for an unknown card or lane; for a sessionless card going to
- * a work lane (a sessionless card only rests in the backlog); and for a card
- * with a session going to the backlog (which holds none). The link is never
- * touched.
+ * Moves a card to `laneId` and, when `beforeCardId` names a card of that lane,
+ * puts it right before it — the drop a drag-and-drop makes, anywhere in the
+ * target lane (the card menu's Move up / Move down is the same move with the
+ * card's own lane, one neighbour over). Without `beforeCardId` the card goes
+ * last in the lane (a plain lane transition).
+ *
+ * Refused (null) for an unknown card or lane, for a sessionless card entering
+ * a work lane (a sessionless card only rests in the backlog) and for a card
+ * with a session entering the backlog (which holds none). A move that stays in
+ * the card's own lane skips those entry rules — the card is already there, only
+ * its position changes. The link is never touched. A move that lands exactly
+ * where the card already was returns the SAME board, so the caller writes
+ * nothing.
  */
-export function moveCardToLane(board: KanbanBoard, cardId: string, laneId: string, now: number): KanbanBoard | null {
+export function moveCardToLane(
+  board: KanbanBoard,
+  cardId: string,
+  laneId: string,
+  now: number,
+  beforeCardId: string | null = null,
+): KanbanBoard | null {
   const card = board.cards.find((c) => c.id === cardId);
   const lane = laneById(board, laneId);
   if (!card || !lane) return null;
-  if (card.laneId === laneId) return board;
-  if (card.sessionId === null && !lane.fixed) return null;
-  if (card.sessionId !== null && lane.fixed) return null;
-  const moved = { ...card, laneId, updatedAt: now };
-  return { ...board, cards: [...board.cards.filter((c) => c.id !== cardId), moved] };
+  if (card.laneId !== laneId && !canRestInLane(card, lane)) return null;
+  const placed = placeCard(board.cards, { ...card, laneId, updatedAt: now }, laneId, beforeCardId);
+  // Landing exactly where the card already was writes nothing.
+  return sameLaneOrder(board.cards, placed) ? board : { ...board, cards: placed };
 }
 
 /**
- * The model's decision: the card's stage is done, it moves to the next lane.
+ * The model's decision: the card's stage is done, it moves to the next lane,
+ * last in it (a card's place inside a lane is its board position).
  * Refused (null) for an unknown card or a card already in the last lane.
  */
 export function advanceCard(board: KanbanBoard, cardId: string, now: number): KanbanBoard | null {
@@ -170,7 +216,7 @@ export function advanceCard(board: KanbanBoard, cardId: string, now: number): Ka
   const index = laneIndex(board, card.laneId);
   const next = board.lanes[index + 1];
   if (index < 0 || !next) return null;
-  return replaceCard(board, cardId, (c) => ({ ...c, laneId: next.id, updatedAt: now }));
+  return { ...board, cards: placeCard(board.cards, { ...card, laneId: next.id, updatedAt: now }, next.id, null) };
 }
 
 /**
@@ -330,7 +376,7 @@ export function applyKanbanAction(board: KanbanBoard, request: KanbanAction, now
     case "delete-card":
       return deleteCard(board, request.cardId);
     case "move-card":
-      return moveCardToLane(board, request.cardId, request.laneId, now);
+      return moveCardToLane(board, request.cardId, request.laneId, now, request.beforeCardId ?? null);
     case "advance-card":
       return advanceCard(board, request.cardId, now);
     case "link-session":
