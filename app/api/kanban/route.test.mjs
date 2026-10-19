@@ -495,3 +495,51 @@ test("a revOnly=1 GET passes an untrusted host: a pure stat, like create=0, and 
   assert.deepEqual(none.body, { revision: 0 });
   assert.ok(!bare.exists(), "a stat never creates");
 });
+
+test("a read unlinks a card whose session file vanished: keeps lane and snapshot, writes only while something was dead", async (t) => {
+  const f = fixture(t);
+  const dir = fabricateSession(f.agentDir, f.project, "d-1");
+  await get(f.project);
+
+  const linked = await post({ cwd: f.project, action: "create-card-for-session", sessionId: "d-1", sessionTitle: "Dead one" });
+  assert.equal(linked.status, 200);
+  const cardId = linked.body.board.cards[0].id;
+
+  fs.rmSync(join(dir, "2026-01-01T00-00-00-000Z_d-1.jsonl"));
+
+  const pruned = await get(f.project);
+  assert.equal(pruned.status, 200);
+  const card = pruned.body.board.cards.find((c) => c.id === cardId);
+  assert.equal(card.sessionId, null, "the dead link is unlinked");
+  assert.equal(card.sessionTitle, "Dead one", "the snapshot survives");
+  assert.equal(card.laneId, "lane-todo", "the lane survives");
+
+  const bytes = f.bytes();
+  const again = await get(f.project);
+  assert.equal(again.status, 200);
+  assert.equal(f.bytes(), bytes, "a read with nothing dead writes nothing");
+});
+
+test("a mutation prunes dead links inside its own lock: the answered board is already clean", async (t) => {
+  const f = fixture(t);
+  const dir2 = fabricateSession(f.agentDir, f.project, "d-2");
+  fabricateSession(f.agentDir, f.project, "d-3");
+  await get(f.project);
+
+  const two = await post({ cwd: f.project, action: "create-card-for-session", sessionId: "d-2", sessionTitle: "Going" });
+  assert.equal(two.status, 200);
+  const card2 = two.body.board.cards.find((c) => c.sessionId === "d-2");
+  const three = await post({ cwd: f.project, action: "add-card", laneId: "lane-plan", title: "T3", sessionId: "d-3", sessionTitle: "Three" });
+  assert.equal(three.status, 200);
+  const card3 = three.body.board.cards.find((c) => c.sessionId === "d-3");
+
+  fs.rmSync(join(dir2, "2026-01-01T00-00-00-000Z_d-2.jsonl"));
+
+  const advanced = await post({ cwd: f.project, action: "advance-card", cardId: card3.id });
+  assert.equal(advanced.status, 200);
+  assert.equal(advanced.body.board.cards.find((c) => c.id === card3.id).laneId, "lane-implement");
+  const prunedCard = advanced.body.board.cards.find((c) => c.id === card2.id);
+  assert.equal(prunedCard.sessionId, null, "the dead link is gone from the answered board");
+  assert.equal(prunedCard.sessionTitle, "Going");
+  assert.equal(f.file().board.cards.find((c) => c.id === card2.id).sessionId, null);
+});
