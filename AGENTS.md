@@ -73,6 +73,7 @@ app/api/
   mcp/test/route.ts                POST { scope, name, cwd? } test one server once (entry read from its file)
   mcp/sign-in/route.ts             POST { scope, name, cwd? } start or join an OAuth sign-in
   mcp/sign-in/[flowId]/route.ts    GET flow state (polled) | POST { redirectUrl } | DELETE cancel
+  kanban/route.ts                  GET ?cwd= [&revOnly=1] a project's board + revision | POST { cwd, action, … } one board mutation (typed refusals)
   project-trust/route.ts           GET trust status + project .pi/mcp.json servers (files only) | POST trust, rebuild the cwd's wrappers
   tools/settings/route.ts          GET/PUT defaultTools switches: PowerShell (Windows), Code mode automatic/always; codemode.mode, codemode.inlineBudget
   cache-miss-notices/route.ts      GET/PUT pi's global showCacheMissNotices (Settings › General)
@@ -107,6 +108,10 @@ lib/
   session-tree.ts           sidebar row model: pinned section, project groups and their order, archived predicate, virtual rows, drop targets
   session-ui-state.ts       pi-web-session-state.json (pins, archive, project order and names): lock, atomic write, revision, corrupt backup
   session-ui-state-shared.ts client-safe types and rules of that state: request parsing, apply, undo snapshot
+  kanban-types.ts           client-safe kanban types, default lanes, action union, on-disk envelope
+  kanban-shared.ts          client-safe pure board reducers (null = refused) shared by the route and the client's optimistic apply
+  kanban-store.ts           server-only <project>/.pi/kanban.json: lock, atomic write, revision (counter or mtime), corrupt backup, dead-session pruning
+  kanban.ts                 client board cache + hooks: optimistic writes with rollback, revision poll, loading/error status
   sidebar-prefs.ts          per-browser sidebar tab, group expand choices, archive folds, pinned-section collapse, files-section fold, folders found outside git
   sidebar-actions.ts        session row menu entries, a project group's name entries and rename request, fork refusal messages, delete-all requests
   session-links.ts          same-instance links: a session's (?session=<id>), a fresh composer's (?cwd=<dir>); the plain-click rule the sidebar keeps in the page

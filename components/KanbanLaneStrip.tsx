@@ -1,7 +1,7 @@
 "use client";
 
 // The board strip: the thin bar at the top of a chat that always shows where
-// this session's card sits in its project's lanes (UI design phase, mock data).
+// this session's card sits in its project's lanes.
 // Lanes read left to right; the card's lane is the only one highlighted. The
 // user never moves the card — the strip's demo control stands in for the
 // model's decision, and the menu unlinks the session from the board.
@@ -9,12 +9,12 @@
 import { useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import type { KanbanBoard as KanbanBoardData, KanbanCard, KanbanLane } from "@/lib/kanban-mock";
-import { laneIndex } from "@/lib/kanban-mock";
+import type { KanbanBoard as KanbanBoardData, KanbanCard, KanbanLane } from "@/lib/kanban-types";
+import { laneIndex } from "@/lib/kanban-shared";
 import { CardMenu, type MenuEntry } from "./KanbanBoard";
 
 export interface KanbanLaneStripProps {
-  /** The board of the session's project; null = the project has no board. */
+  /** The board of the session's project; null until it has loaded (the strip draws nothing till then). */
   board: KanbanBoardData | null;
   /** This session's card; null = untracked. */
   card: KanbanCard | null;

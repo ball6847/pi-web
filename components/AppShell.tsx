@@ -13,17 +13,15 @@ import { openFileTab, saveFileViewerState, saveParkedFileViewerState, switchFile
 import { SettingsPanel, SettingsSectionIcon } from "./SettingsPanel";
 import { KanbanBoard } from "./KanbanBoard";
 import { KanbanLaneStrip } from "./KanbanLaneStrip";
+import { cardForSession } from "@/lib/kanban-shared";
 import {
-  boardExists,
-  cardForSession,
   kanbanAdvanceCard,
   kanbanCreateCardForSession,
   kanbanLinkCard,
-  kanbanSyncSeedLinks,
   kanbanUnlinkCard,
   useKanbanBoard,
   useKanbanSessionIndex,
-} from "@/lib/kanban-mock";
+} from "@/lib/kanban";
 import { ProjectTrustDialog, type ProjectTrustFailure } from "./ProjectTrustDialog";
 import { BranchNavigator, hasSessionBranches } from "./BranchNavigator";
 import { SystemPromptPanel } from "./SystemPromptPanel";
@@ -240,8 +238,8 @@ export function AppShell() {
   const [projectTrustBusy, setProjectTrustBusy] = useState(false);
   const [projectTrustError, setProjectTrustError] = useState<ProjectTrustFailure | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => !initialNavigation.sidebarCollapsed);
-  // Kanban board (mock, UI design phase): the main-area view the center
-  // content switches to, the chat's top strip, and the fresh composer's choice.
+  // Kanban board: the main-area view the center content switches to, the
+  // chat's top strip, and the fresh composer's choice.
   const [centerView, setCenterView] = useState<"chat" | "board">("chat");
   const [boardProjectDir, setBoardProjectDir] = useState<string | null>(null);
   const [boardHighlightCardId, setBoardHighlightCardId] = useState<string | null>(null);
@@ -998,7 +996,7 @@ export function AppShell() {
     setSelectedSession(session);
     hydrateSelectedSession(session.id);
     router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
-    // Kanban (mock): the composer's "track on board" choice becomes the session's card.
+    // Kanban: the composer's "track on board" choice becomes the session's card.
     const laneId = newSessionKanbanLaneIdRef.current;
     if (laneId) {
       const title = session.name || session.firstMessage || session.id;
@@ -1348,7 +1346,7 @@ export function AppShell() {
     newSessionBarFocusRef.current = null;
   }, []);
   const showChat = selectedSession !== null || effectiveNewSessionCwd !== null;
-  // Kanban (mock, UI design phase): one board per project directory, created on
+  // Kanban: one board per project directory (`.pi/kanban.json`), created on
   // demand for every project. The center switches between the chat and that
   // project's board; the chat keeps a thin strip with this session's card.
   const composerBoardDir = selectedSession === null && effectiveNewSessionCwd
@@ -1359,7 +1357,7 @@ export function AppShell() {
     : composerBoardDir;
   const contextBoard = useKanbanBoard(kanbanContextDir);
   const viewBoard = useKanbanBoard(centerView === "board" ? boardProjectDir : null);
-  const boardTabAvailable = showChat && (boardExists(kanbanContextDir) || centerView === "board");
+  const boardTabAvailable = showChat && (kanbanContextDir !== null || centerView === "board");
   const openKanbanBoardView = useCallback((projectDir: string | null, cardId: string | null = null) => {
     if (projectDir) setBoardProjectDir(projectDir);
     setCenterView("board");
@@ -1376,15 +1374,6 @@ export function AppShell() {
   useEffect(() => {
     setNewSessionKanbanLaneId(null);
   }, [composerBoardDir]);
-  // Offer the seeded, sessionless cards the project's real pi sessions (once per board).
-  useEffect(() => {
-    if (!kanbanContextDir) return;
-    const projectSessions = sessionsWithSelection
-      .filter((session) => session.relation?.kind !== "subagent")
-      .filter((session) => (session.projectRoot ?? session.cwd) === kanbanContextDir)
-      .map((session) => ({ id: session.id, title: session.name || session.firstMessage || session.id }));
-    kanbanSyncSeedLinks(kanbanContextDir, projectSessions);
-  }, [kanbanContextDir, sessionsWithSelection]);
   const sessionBoardCard = selectedSession && contextBoard ? cardForSession(contextBoard, selectedSession.id) : null;
   const boardSessions = useMemo(
     () => boardProjectDir
@@ -2775,7 +2764,7 @@ export function AppShell() {
               kanbanStrip={kanbanStrip}
             />
             </div>
-            {centerView === "board" && boardProjectDir && viewBoard ? (
+            {centerView === "board" && boardProjectDir ? (
               <div style={{ position: "absolute", inset: 0 }}>
                 <KanbanBoard
                   board={viewBoard}

@@ -1,11 +1,13 @@
 "use client";
 
-// The project's kanban board as a main-area view (UI design phase, mock data).
+// The project's kanban board as a main-area view.
 // One board per project: the fixed backlog lane (cards with a title and a
 // description only, never a session) and the lanes the work flows through.
 // The model — not the user — moves a card to the next lane; the board's own
 // controls add, edit, link, unlink and remove cards, and configure lanes.
-// Nothing here talks to the server: lib/kanban-mock.ts keeps the state.
+// The board lives on the server (lib/kanban.ts caches it and applies the
+// board's own controls optimistically); this view shows it, with a placeholder
+// while it loads and a retry banner when a load or a write failed.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -17,7 +19,9 @@ import {
   type KanbanBoard as KanbanBoardData,
   type KanbanCard,
   type KanbanLane,
-  cardsOfLane,
+} from "@/lib/kanban-types";
+import { cardsOfLane, laneIndex } from "@/lib/kanban-shared";
+import {
   kanbanAddCard,
   kanbanAddLane,
   kanbanAdvanceCard,
@@ -28,11 +32,12 @@ import {
   kanbanRenameLane,
   kanbanUnlinkCard,
   kanbanUpdateCard,
-  laneIndex,
-} from "@/lib/kanban-mock";
+  useKanbanBoardStatus,
+} from "@/lib/kanban";
 
 export interface KanbanBoardProps {
-  board: KanbanBoardData;
+  /** The project's board; null while it loads (or when its load failed). */
+  board: KanbanBoardData | null;
   projectDir: string;
   /** Display name of the project the board belongs to. */
   projectName: string;
@@ -1167,8 +1172,95 @@ function ConfigLaneRow({
 
 // -- board -----------------------------------------------------------------------
 
+function BoardNotice({ error, onRetry }: { error: string; onRetry(): void }) {
+  const { t } = useI18n();
+  return (
+    <div
+      role="alert"
+      title={error}
+      style={{
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        minHeight: 30,
+        padding: "0 12px",
+        fontSize: 11.5,
+        color: "#dc2626",
+        background: "color-mix(in srgb, #dc2626 8%, var(--bg))",
+        borderBottom: "1px solid color-mix(in srgb, #dc2626 30%, var(--border))",
+      }}
+    >
+      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t("kanban.loadFailed")}</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        style={{
+          flexShrink: 0,
+          height: 22,
+          padding: "0 10px",
+          fontSize: 11,
+          color: "var(--text)",
+          background: "var(--bg-panel)",
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          cursor: "pointer",
+        }}
+      >
+        {t("kanban.retry")}
+      </button>
+    </div>
+  );
+}
+
+/** The frame of the board (header, content area) while there is no board to draw: the lanes arrive into the same box. */
+function BoardShell({ projectName, taskCount, children }: { projectName: string; taskCount: number | null; children: React.ReactNode }) {
+  const { t } = useI18n();
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg)", minWidth: 0 }}>
+      <header style={{
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        height: 40,
+        padding: "0 12px",
+        background: "var(--bg-panel)",
+        borderBottom: "1px solid var(--border)",
+      }}>
+        <KanbanIcon size={15} style={{ color: "var(--accent)" }} />
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "50%" }} title={projectName}>
+          {projectName}
+        </span>
+        {taskCount !== null && (
+          <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0 }}>{t("kanban.boardTasks", { count: taskCount })}</span>
+        )}
+      </header>
+      {children}
+    </div>
+  );
+}
+
 export function KanbanBoard(props: KanbanBoardProps) {
-  const { board, projectDir, projectName, sessions, runningSessionIds, highlightCardId, onOpenSession } = props;
+  const { board, projectDir, projectName } = props;
+  const { t } = useI18n();
+  const { status, error, retry } = useKanbanBoardStatus(projectDir);
+  const notice = status === "error" ? <BoardNotice error={error ?? ""} onRetry={retry} /> : null;
+  if (board) return <KanbanBoardView {...props} board={board} notice={notice} />;
+  return (
+    <BoardShell projectName={projectName} taskCount={null}>
+      {notice}
+      {status === "error" ? null : (
+        <div role="status" style={{ padding: "14px 16px", fontSize: 12, color: "var(--text-dim)" }}>
+          {t("kanban.loadingBoard")}
+        </div>
+      )}
+    </BoardShell>
+  );
+}
+
+function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; notice: React.ReactNode }) {
+  const { board, projectDir, projectName, sessions, runningSessionIds, highlightCardId, onOpenSession, notice } = props;
   const { t } = useI18n();
   const mobile = useIsMobile();
   const [configOpen, setConfigOpen] = useState(false);
@@ -1353,6 +1445,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           {!mobile && t("kanban.boardConfigure")}
         </button>
       </header>
+      {notice}
       {mobile && activeMobileLane && (
         <div style={{ flexShrink: 0, display: "flex", gap: 6, padding: "8px 12px 0", overflowX: "auto", scrollbarWidth: "none" }}>
           {board.lanes.map((lane) => {

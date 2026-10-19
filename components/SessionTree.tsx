@@ -29,7 +29,7 @@ import {
   type SidebarRow,
 } from "@/lib/session-tree";
 import type { SessionInfo } from "@/lib/types";
-import type { KanbanSessionInfo } from "@/lib/kanban-mock";
+import type { KanbanSessionInfo } from "@/lib/kanban";
 import { isPlainActivation, sessionDeepLink } from "@/lib/session-links";
 import { formatRelativeTime, formatShortRelativeTime } from "@/lib/i18n/format";
 import { skillExpansionToCommand } from "@/lib/slash-display";

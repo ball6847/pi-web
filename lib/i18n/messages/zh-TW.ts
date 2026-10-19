@@ -1536,5 +1536,8 @@ export const zhTWLocale: LocalePlugin = {
     "kanban.composerTrackTitle": "加入看板：{lane}",
     "kanban.sidebarBoard": "開啟 {name} 的看板",
     "kanban.sidebarDot": "在看板上 · {lane}",
+    "kanban.loadingBoard": "正在載入看板…",
+    "kanban.loadFailed": "無法載入或儲存看板。",
+    "kanban.retry": "重試",
   },
 };

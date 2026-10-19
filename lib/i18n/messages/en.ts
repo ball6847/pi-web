@@ -1536,5 +1536,8 @@ export const enLocale: LocalePlugin = {
     "kanban.composerTrackTitle": "Track on board: {lane}",
     "kanban.sidebarBoard": "Open {name}'s board",
     "kanban.sidebarDot": "On board · {lane}",
+    "kanban.loadingBoard": "Loading board…",
+    "kanban.loadFailed": "Couldn't load or save the board.",
+    "kanban.retry": "Retry",
   },
 };

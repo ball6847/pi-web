@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { NewSessionContext, NewSessionTarget, ProjectChoice } from "@/lib/new-session-context";
 import { focusIfLost } from "@/lib/stacked-dialog";
-import type { KanbanLane } from "@/lib/kanban-mock";
+import type { KanbanLane } from "@/lib/kanban-types";
 import { ChevronIcon } from "./SidebarIcons";
 import { ProjectWorktreePicker, type ProjectWorktreeControl, type ProjectWorktreePickerHandle } from "./ProjectWorktreePicker";
 
