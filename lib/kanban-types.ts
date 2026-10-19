@@ -1,8 +1,8 @@
 /**
- * Client-safe types and constants of the kanban domain: one board per project
- * directory, stored server-side at `<projectDir>/.pi/kanban.json`
- * (`lib/kanban-store.ts`). No node: imports here; the rules live in
- * `lib/kanban-shared.ts`.
+ * Client-safe types and constants of the kanban domain: one board per project,
+ * stored server-side under pi's shared agent storage
+ * (`<agentDir>/kanban/<encoded-project-root>/kanban.json`, `lib/kanban-store.ts`).
+ * No node: imports here; the rules live in `lib/kanban-shared.ts`.
  */
 
 export interface KanbanLane {
@@ -34,7 +34,7 @@ export interface KanbanBoard {
 
 export const KANBAN_SCHEMA_VERSION = 1;
 
-/** What `.pi/kanban.json` holds. */
+/** What the board's shared `kanban.json` holds. */
 export interface KanbanEnvelope {
   schemaVersion: typeof KANBAN_SCHEMA_VERSION;
   board: KanbanBoard;

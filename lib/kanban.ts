@@ -1,6 +1,7 @@
 /**
  * Client store and hooks of the kanban board: a module-level cache of the
- * boards the server holds (`/api/kanban`, `<projectDir>/.pi/kanban.json`).
+ * boards the server holds (`/api/kanban`, shared storage under `~/.pi/agent`;
+ * see `lib/kanban-store.ts`).
  *
  * One entry per project directory — callers key by the project root
  * (`projectRoot ?? cwd`), which is also how the server matches sessions to a

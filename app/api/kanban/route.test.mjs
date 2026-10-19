@@ -43,15 +43,17 @@ function fixture(t, { allow = true } = {}) {
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
     fs.rmSync(root, { recursive: true, force: true });
   });
+  const key = `--${project.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+  const path = join(agentDir, "kanban", key, "kanban.json");
   return {
     root,
     agentDir,
     project,
-    path: join(project, ".pi", "kanban.json"),
-    file: () => JSON.parse(fs.readFileSync(join(project, ".pi", "kanban.json"), "utf8")),
-    bytes: () => fs.readFileSync(join(project, ".pi", "kanban.json"), "utf8"),
-    exists: () => fs.existsSync(join(project, ".pi", "kanban.json")),
-    stat: () => fs.statSync(join(project, ".pi", "kanban.json")),
+    path,
+    file: () => JSON.parse(fs.readFileSync(path, "utf8")),
+    bytes: () => fs.readFileSync(path, "utf8"),
+    exists: () => fs.existsSync(path),
+    stat: () => fs.statSync(path),
   };
 }
 

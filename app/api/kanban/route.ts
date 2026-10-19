@@ -11,12 +11,14 @@ import {
 } from "@/lib/kanban-store";
 import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security";
 
-// The project's kanban board (`<cwd>/.pi/kanban.json`, `lib/kanban-store.ts`).
+// The project's kanban board, shared by every worktree of the repository
+// (`<agentDir>/kanban/<encoded-project-root>/kanban.json`; `lib/kanban-store.ts`).
 //
 // GET  ?cwd=<absolute project folder>           → { board, revision }; a board
 //      never written is created with the default lanes (the one write a GET makes),
-//      and cards whose session is gone are unlinked first. With ?create=0 a
-//      missing board reads as empty (revision 0) and nothing is written.
+//      importing the project's old `.pi/kanban.json` first, and cards whose
+//      session is gone are unlinked. With ?create=0 a missing board reads as
+//      empty (revision 0) and nothing is written or imported.
 // GET  ?cwd=...&revOnly=1                       → { revision }, a pure stat: no
 //      parse, no write, no pruning (the client's poll).
 // POST { cwd, action, ...payload }              → { board, revision }
