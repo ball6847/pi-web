@@ -61,5 +61,6 @@
 - The "Demo:" prefix on advance actions (`kanban.menuAdvance`) marks model-driven moves. Keep it while the demo control stands in for the model: without it the menu reads as a manual move, which the board's rules forbid.
 
 ## Not built
+- Shared board storage under `~/.pi/agent`: the board is per project (and committable), so parallel worktrees of the same repo carry separate copies and task state forks; the store is planned to move to pi's shared agent storage (roadmap M4) so every worktree of a project shares one board. Until it lands, the per-project file above stands.
 - The model advancing cards on the protocol side: the card moves when the model decides the stage is done, replacing the "Demo:" menu entries.
 - A push channel for the board (the revision poll is the sync) and undo; several boards per project.

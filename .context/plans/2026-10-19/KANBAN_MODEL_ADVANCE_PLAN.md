@@ -28,6 +28,10 @@ signoff: null
   already exists: the board lives at the project root
   (`resolveProject(session.cwd).projectRoot`), a session's card is found by
   `sessionId`, and the store's `readBoard(cwd, { create: false })` reads a
+  board without creating it. (Storage delta 2026-10-19: the roadmap's M4 —
+  shared storage under `~/.pi/agent` — lands before this plan; the store API
+  and `sessionId` matching are storage-agnostic, so only the store's path
+  resolution changes, not this tool's flow.)
   missing board as empty without writing.
 - **Related Decisions**: the tool advances only the calling session's own
   card (one session drives one card — the board's existing invariant); it
