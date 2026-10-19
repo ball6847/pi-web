@@ -21,7 +21,8 @@
 ## Store, lock and revision (`lib/kanban-store.ts`)
 - Every write is read → reducer → validate → write under an in-process queue (`serializeByKey`) plus a `proper-lockfile` lock, as `lib/session-ui-state.ts` does; a lock that cannot be taken in about 3 s answers 423. Store functions return typed results (`{ ok, board, revision } | { ok: false, code, error }`) — nothing throws at the route.
 - Revision = `max(in-process write counter, file mtimeMs)`; the counter moves strictly forward on each write (even two writes in one mtime tick), the mtime part makes an edit from another process or another pi-web server visible.
-- A mutation that changes nothing (the reducer returns the **same board object**) writes nothing.
+- A mutation that changes nothing (the reducer returns the **same board object**) writes nothing — and therefore leaves the revision standing, so the poll sees no change.
+- The one write a refused mutation can make: when the edit finds no board, the fresh one is written (with the counter noted) even though the action itself is refused, so the next read sees a real board with a real revision.
 
 ## Pruning (dead sessions)
 - On every board read and inside every mutation (same lock), a card whose `sessionId` no longer has a session file is unlinked: it keeps its lane and its snapshot `sessionTitle`. A read writes only when something was actually dead. Existence is the cached session path re-verified with `existsSync`; a stale path cache is invalidated and re-resolved (a dead session costs one directory scan, once — the link is gone afterwards).

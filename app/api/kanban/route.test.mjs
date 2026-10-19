@@ -554,3 +554,36 @@ test("a fresh board's bytes are exactly the canonical envelope: 2-space JSON, tr
   assert.ok(!f.bytes().includes("undefined"));
   assert.equal(f.stat().mode & 0o777, 0o644);
 });
+
+test("an edit that changes nothing writes nothing and leaves the revision standing", async (t) => {
+  const f = fixture(t);
+  await get(f.project);
+  const added = await post({ cwd: f.project, action: "add-card", laneId: "lane-todo", title: "Same" });
+  assert.equal(added.status, 200);
+  const rev = added.body.revision;
+  assert.ok(rev > 0);
+  const bytes = f.bytes();
+  const cardId = added.body.board.cards[0].id;
+
+  const noop = await post({ cwd: f.project, action: "edit-card", cardId, title: "Same" });
+  assert.equal(noop.status, 200);
+  assert.equal(noop.body.revision, rev, "the reducer's same-object result skips the write, so no bump");
+  assert.equal(f.bytes(), bytes, "the file is untouched");
+
+  const real = await post({ cwd: f.project, action: "edit-card", cardId, title: "Changed" });
+  assert.equal(real.status, 200);
+  assert.ok(real.body.revision > rev, "a real change moves the revision");
+});
+
+test("a refused mutation on a bare project still materializes the fresh board", async (t) => {
+  const f = fixture(t);
+  assert.ok(!f.exists());
+  const res = await post({ cwd: f.project, action: "advance-card", cardId: "nope" });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.code, "refused");
+  assert.ok(f.exists(), "the edit writes the fresh board even though the action was refused");
+  assert.equal(f.file().board.cards.length, 0);
+  const rev = await get(f.project, "&revOnly=1");
+  assert.equal(rev.status, 200);
+  assert.ok(rev.body.revision > 0, "the write left a revision behind");
+});
