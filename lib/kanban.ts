@@ -495,6 +495,12 @@ export function kanbanAdvanceCard(projectDir: string | null, cardId: string): Ka
   const card = next?.cards.find((c) => c.id === cardId);
   return next && card ? laneById(next, card.laneId) : null;
 }
+/** The user's call: the card goes to `laneId`, last in it. Null when the rules refuse (or the board is not loaded). */
+export function kanbanMoveCard(projectDir: string | null, cardId: string, laneId: string): KanbanLane | null {
+  const next = mutate(projectDir, { action: "move-card", cardId, laneId });
+  const card = next?.cards.find((c) => c.id === cardId);
+  return next && card ? laneById(next, card.laneId) : null;
+}
 /**
  * A session that started "tracked on board": a new card for it in the lane the
  * composer picked. A board not loaded yet cannot be validated locally, so the
@@ -522,13 +528,24 @@ export function acquireBoardWatcherForTests(key: string, creating = false): () =
 }
 
 /**
- * The board a `useKanbanBoard` subscriber would see, without a renderer:
- * `adopt` keeps the old object when a refetch's JSON is identical, so this
- * reference is stable across an unchanged poll — export it so node tests can
- * pin that rule (the store's resetKanbanStateForTests pattern).
+ * The board a `useKanbanBoard` subscriber would see, without a renderer: the
+ * shown board (server board + pending writes) or null. The shell reads it
+ * outside a component's render — a fresh composer's pending attach, applied
+ * when pi answers with the real session id — so the decision uses the board
+ * as it stands at that moment, not a closure's possibly stale copy.
+ */
+export function kanbanBoardSnapshot(projectDir: string): KanbanBoard | null {
+  return entries.get(projectDir)?.board ?? null;
+}
+
+/**
+ * `adopt` keeps the old object when a refetch's JSON is identical, so a
+ * snapshot's reference is stable across an unchanged poll — export the read
+ * under the tests' name too, so node tests can pin that rule (the store's
+ * resetKanbanStateForTests pattern).
  */
 export function kanbanBoardSnapshotForTests(projectDir: string): KanbanBoard | null {
-  return entries.get(projectDir)?.board ?? null;
+  return kanbanBoardSnapshot(projectDir);
 }
 
 /**

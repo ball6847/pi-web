@@ -99,6 +99,17 @@ export function addCard(
   return { ...board, cards: [...others, card] };
 }
 
+/**
+ * The board's sessionless cards for an "attach to card" menu: newest first
+ * (your recent cards are the top hits), ties keep the board's order. The list
+ * self-shrinks as linking consumes cards; a busy backlog is the growth case.
+ */
+export function sessionlessCardsByRecency(board: KanbanBoard): KanbanCard[] {
+  return board.cards
+    .filter((card) => card.sessionId === null)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
 /** Title and description edits. Refused (null) for an unknown card; a blank title is ignored. */
 export function updateCard(
   board: KanbanBoard,
@@ -119,6 +130,16 @@ export function updateCard(
 export function deleteCard(board: KanbanBoard, cardId: string): KanbanBoard {
   if (!board.cards.some((card) => card.id === cardId)) return board;
   return { ...board, cards: board.cards.filter((card) => card.id !== cardId) };
+}
+
+/**
+ * Whether the move-card rules allow `card` to rest in `lane`: a sessionless
+ * card only in the fixed backlog, a linked card nowhere near it. The view
+ * uses it to mark undroppable lanes during a drag (the same gate
+ * moveCardToLane applies on the write).
+ */
+export function canRestInLane(card: KanbanCard, lane: KanbanLane): boolean {
+  return (card.sessionId === null) === !!lane.fixed;
 }
 
 /**
