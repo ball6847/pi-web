@@ -734,15 +734,62 @@ function CardForm({
     initial?.sessionId ? { id: initial.sessionId, title: initial.sessionTitle ?? "", running: false } : null,
   );
   const [pickerAnchor, setPickerAnchor] = useState<DOMRect | null>(null);
+  const formRef = useRef<HTMLDivElement | null>(null);
   const titleRef = useRef<HTMLInputElement | null>(null);
   const sessionBtnRef = useRef<HTMLButtonElement | null>(null);
+  const onDoneRef = useRef(onDone);
+  useEffect(() => {
+    onDoneRef.current = onDone;
+  });
 
   useEffect(() => {
     titleRef.current?.focus();
   }, []);
 
+  // Escape cancels the edit: a keydown on `document` in the bubble phase, so
+  // what is above this form (its session picker, the lane config dialog)
+  // takes its Escape first — both stop it in the capture phase on `document`
+  // — and the key never reaches the window-level Esc that stops a run. An
+  // Escape owned by a text entry elsewhere on the page is left alone, as is
+  // one that cancels an IME composition.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const inside = target !== null && formRef.current?.contains(target);
+      const inTextEntry =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable);
+      if (!inside && inTextEntry) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onDoneRef.current();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   const needsSession = !lane.fixed;
   const canSave = title.trim().length > 0 && (!needsSession || session !== null);
+  const submit = () => {
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle) return;
+    if (initial) {
+      kanbanUpdateCard(projectDir, initial.id, { title: trimmedTitle, description });
+      if (needsSession && session && session.id !== initial.sessionId) {
+        kanbanLinkCard(projectDir, initial.id, session.id, session.title);
+      }
+    } else {
+      kanbanAddCard(projectDir, lane.id, {
+        title: trimmedTitle,
+        description,
+        sessionId: session?.id ?? null,
+        sessionTitle: session?.title ?? null,
+      });
+    }
+    onDone();
+  };
   const sessionOptions = useMemo(
     () => sessions.map((s) => ({ id: s.id, title: s.name || s.firstMessage || s.id, running: runningIds.has(s.id) })),
     [sessions, runningIds],
@@ -750,6 +797,7 @@ function CardForm({
 
   return (
     <div
+      ref={formRef}
       style={{
         flexShrink: 0,
         background: "var(--bg-panel)",
@@ -765,6 +813,13 @@ function CardForm({
         ref={titleRef}
         value={title}
         onChange={(event) => setTitle(event.target.value)}
+        // Enter saves from the title field; the description keeps its newlines.
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+            event.preventDefault();
+            if (canSave) submit();
+          }
+        }}
         placeholder={t("kanban.cardFormTitle")}
         style={{
           width: "100%",
@@ -854,24 +909,7 @@ function CardForm({
         <button
           type="button"
           disabled={!canSave}
-          onClick={() => {
-            const trimmedTitle = title.trim();
-            if (!trimmedTitle) return;
-            if (initial) {
-              kanbanUpdateCard(projectDir, initial.id, { title: trimmedTitle, description });
-              if (needsSession && session && session.id !== initial.sessionId) {
-                kanbanLinkCard(projectDir, initial.id, session.id, session.title);
-              }
-            } else {
-              kanbanAddCard(projectDir, lane.id, {
-                title: trimmedTitle,
-                description,
-                sessionId: session?.id ?? null,
-                sessionTitle: session?.title ?? null,
-              });
-            }
-            onDone();
-          }}
+          onClick={submit}
           style={{
             padding: "5px 12px",
             fontSize: 12,
@@ -947,7 +985,6 @@ function LaneColumn({
   const { t } = useI18n();
   const cards = cardsOfLane(board, lane.id);
   const formHere = form?.laneId === lane.id ? form : null;
-  const editing = formHere?.cardId ? cards.find((c) => c.id === formHere.cardId) ?? null : null;
   // One lane fills the phone screen in the single-lane mobile mode.
   const width = mobile ? "100%" : 250;
 
@@ -1033,17 +1070,22 @@ function LaneColumn({
         )}
       </header>
       <div data-kanban-lane-cards style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, padding: 8 }}>
-        {formHere && (
-          <CardForm
-            projectDir={projectDir}
-            lane={lane}
-            initial={editing}
-            sessions={sessions}
-            runningIds={runningIds}
-            onDone={() => onOpenForm(lane.id, editing)}
-          />
-        )}
-        {cards.filter((card) => card.id !== editing?.id).map((card) => {
+        {cards.map((card) => {
+          // The edit form replaces the card in place, so the card keeps its
+          // own spot in the lane while it is being edited.
+          if (formHere?.cardId === card.id) {
+            return (
+              <CardForm
+                key={`form:${card.id}`}
+                projectDir={projectDir}
+                lane={lane}
+                initial={card}
+                sessions={sessions}
+                runningIds={runningIds}
+                onDone={() => onOpenForm(lane.id, card)}
+              />
+            );
+          }
           const sessionGone = card.sessionId !== null && !sessionIds.has(card.sessionId);
           return (
             <CardView
@@ -1066,6 +1108,18 @@ function LaneColumn({
             />
           );
         })}
+        {/* A new card lands at the end of the lane, so its form does too. */}
+        {formHere?.cardId === null && (
+          <CardForm
+            key="form:new"
+            projectDir={projectDir}
+            lane={lane}
+            initial={null}
+            sessions={sessions}
+            runningIds={runningIds}
+            onDone={() => onOpenForm(lane.id, null)}
+          />
+        )}
         {cards.length === 0 && !formHere && (
           <div style={{ padding: "10px 8px", textAlign: "center", fontSize: 11, color: "var(--text-dim)" }}>
             {t("kanban.laneEmpty")}
@@ -1495,16 +1549,20 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
         icon: <ChatIcon />,
         onSelect: () => onStartSession(menuCard),
       });
-      entries.push({
-        id: "link",
-        label: t("kanban.menuLink"),
-        icon: <LinkIcon />,
-        disabled: Boolean(backlogLane) || sessionOptions.length === 0,
-        disabledTitle: backlogLane ? t("kanban.backlogNoSessions") : t("kanban.cardFormSessionRequired"),
-        onSelect: () => {
-          if (menuFor) setLinkFor({ cardId: menuCard.id, anchor: menuFor.anchor });
-        },
-      });
+      // The backlog never takes a session, so linking is a dead end there —
+      // "Start session" is its cards' only path into one.
+      if (!backlogLane) {
+        entries.push({
+          id: "link",
+          label: t("kanban.menuLink"),
+          icon: <LinkIcon />,
+          disabled: sessionOptions.length === 0,
+          disabledTitle: t("kanban.cardFormSessionRequired"),
+          onSelect: () => {
+            if (menuFor) setLinkFor({ cardId: menuCard.id, anchor: menuFor.anchor });
+          },
+        });
+      }
     }
     entries.push({
       id: "edit",
