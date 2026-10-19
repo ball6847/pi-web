@@ -1270,7 +1270,7 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
   const [formFor, setFormFor] = useState<{ laneId: string; cardId: string | null } | null>(null);
   const [menuFor, setMenuFor] = useState<{ cardId: string; anchor: DOMRect } | null>(null);
   const [linkFor, setLinkFor] = useState<{ cardId: string; anchor: DOMRect } | null>(null);
-  // A brief accent ring on the card right after the model advanced it (demo).
+  // A brief accent ring on the card right after it moves (the menu's demo advance for now).
   const [flashId, setFlashId] = useState<string | null>(null);
   const setHighlightFlash = useCallback((cardId: string) => {
     setFlashId(cardId);
