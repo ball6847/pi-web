@@ -509,3 +509,33 @@ export function kanbanCreateCardForSession(projectDir: string | null, sessionId:
   }
   enqueue(entryFor(projectDir), action);
 }
+
+/**
+ * The watch lifecycle the useWatchBoard hook drives: the first watcher on a
+ * board starts its revision poll, the last one stops it, and a re-acquire on
+ * a cached board checks now. Exported so node tests can drive it without a
+ * renderer (same pattern as the store's resetKanbanStateForTests).
+ */
+export function acquireBoardWatcherForTests(key: string, creating = false): () => void {
+  return acquire(key, creating);
+}
+
+/**
+ * The board a `useKanbanBoard` subscriber would see, without a renderer:
+ * `adopt` keeps the old object when a refetch's JSON is identical, so this
+ * reference is stable across an unchanged poll — export it so node tests can
+ * pin that rule (the store's resetKanbanStateForTests pattern).
+ */
+export function kanbanBoardSnapshotForTests(projectDir: string): KanbanBoard | null {
+  return entries.get(projectDir)?.board ?? null;
+}
+
+/**
+ * The banner's Retry, without a renderer: re-enqueues the entry's `retryable`
+ * writes (the session-missing failures), clears the error and refetches.
+ * Exported so node tests can pin that a Retry re-posts rather than drops
+ * (the store's resetKanbanStateForTests pattern).
+ */
+export function retryBoardForTests(key: string): void {
+  retryBoard(key);
+}

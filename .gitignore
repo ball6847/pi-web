@@ -48,3 +48,5 @@ e2e_*.mjs
 .pi/
 GOAL.md
 check.sh
+ASSUMPTIONS.md
+.pi-loop-log.jsonl
