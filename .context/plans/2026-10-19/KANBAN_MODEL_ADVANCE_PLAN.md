@@ -149,3 +149,92 @@ One step: the tool and the menu removals land together (the menu entry is
 the demo stand-in; keeping it after the tool exists would reintroduce a
 manual move, which the rules forbid). No migration: boards, lanes and
 cards are untouched; only the way a card gets advanced changes.
+
+## Appendix: typechecked draft (pi 1.2.0)
+
+
+Drafted and `tsc --noEmit`-clean against the installed pi 1.2.0; merges into
+`lib/builtin-extensions.ts` (built-in switch + registration, as the mcp built-in does) on
+sign-off. The per-call `ExtensionContext` carries `cwd` and `sessionManager.getSessionId()`;
+the store is called in-process, so a no-op never creates `kanban.json` and a refusal never
+throws into the transcript.
+
+```ts
+// M4 DRAFT — not wired in; typechecked against pi 1.2.0 to de-risk the plan.
+// Merges into lib/builtin-extensions.ts when the plan is signed off.
+import { Type } from "@earendil-works/pi-ai";
+import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { applyMutation, readBoard, type KanbanBoardResult } from "./kanban-store";
+import { resolveProject } from "./worktree";
+
+export const KANBAN_ADVANCE_TOOL_NAME = "kanban_advance";
+
+/** The one object the model sees and the transcript stores (`details`). */
+type KanbanAdvanceAnswer =
+  | { moved: true; from: string; to: string }
+  | { moved: false; reason: "not-tracked" | "last-lane" | string; error?: string };
+
+function answerText(a: KanbanAdvanceAnswer): string {
+  if (a.moved) return `Moved the card from ${a.from} to ${a.to}.`;
+  if (a.reason === "not-tracked") return "This session has no card on the board; nothing moved.";
+  if (a.reason === "last-lane") return "The card is already in the last lane; nothing moved.";
+  return `Could not advance the card: ${a.error ?? a.reason}`;
+}
+
+export function buildKanbanAdvanceTool(ctx: ExtensionContext) {
+  return defineTool({
+    name: KANBAN_ADVANCE_TOOL_NAME,
+    label: "Kanban: advance my card",
+    description:
+      "Advance this session's kanban card one lane to the right when the stage it tracks is done. " +
+      "Takes no parameters: it always moves the calling session's own card, if it has one.",
+    promptSnippet: "Advance this session's kanban card one lane when its stage is done",
+    promptGuidelines: [
+      "Call kanban_advance when you finish the stage the session's board card tracks.",
+      "Nothing happens if this session has no card on the board; it is never an error.",
+      "Do not call it to move another session's card; that is not possible.",
+    ],
+    executionMode: "sequential",
+    exposure: "direct",
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, _signal, _onUpdate, callCtx: ExtensionContext) {
+      void ctx; // the built-in factory's context; per-call context carries cwd + sessionManager
+      let boardResult: KanbanBoardResult;
+      let root: string;
+      try {
+        root = (await resolveProject(callCtx.cwd)).projectRoot;
+        boardResult = await readBoard(root, { create: false });
+      } catch {
+        // A project that cannot be resolved is treated like "no board": a no-op, not an error.
+        return { content: [{ type: "text" as const, text: answerText({ moved: false, reason: "not-tracked" }) }], details: { moved: false, reason: "not-tracked" } };
+      }
+      if (!boardResult.ok) {
+        // The store already refused (cwd-denied, locked, unsupported-schema…): surface it, write nothing.
+        const answer: KanbanAdvanceAnswer = { moved: false, reason: boardResult.code, error: boardResult.error };
+        return { content: [{ type: "text" as const, text: answerText(answer) }], details: answer };
+      }
+      // create:false: a missing board answers as an empty board (no cards), so a
+      // no-op check can never create kanban.json; the card lookup below simply finds nothing.
+      const board = boardResult.board;
+      const sessionId = callCtx.sessionManager.getSessionId();
+      const card = board.cards.find((c) => c.sessionId === sessionId);
+      if (!card) {
+        const answer: KanbanAdvanceAnswer = { moved: false, reason: "not-tracked" };
+        return { content: [{ type: "text" as const, text: answerText(answer) }], details: answer };
+      }
+      const next = board.lanes[board.lanes.findIndex((l) => l.id === card.laneId) + 1] ?? null;
+      if (!next) {
+        const answer: KanbanAdvanceAnswer = { moved: false, reason: "last-lane" };
+        return { content: [{ type: "text" as const, text: answerText(answer) }], details: answer };
+      }
+      const mutation = await applyMutation(root, { action: "advance-card", cardId: card.id });
+      if (!mutation.ok) {
+        const answer: KanbanAdvanceAnswer = { moved: false, reason: mutation.code, error: mutation.error };
+        return { content: [{ type: "text" as const, text: answerText(answer) }], details: answer };
+      }
+      const answer: KanbanAdvanceAnswer = { moved: true, from: card.laneId, to: next.id };
+      return { content: [{ type: "text" as const, text: answerText(answer) }], details: answer };
+    },
+  });
+}
+```
