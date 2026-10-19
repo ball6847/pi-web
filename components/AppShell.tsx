@@ -1032,21 +1032,25 @@ export function AppShell() {
     // first advances one lane (its first work lane): the backlog never takes a
     // session and the store refuses the link there. A card that meanwhile got
     // linked or deleted is refused and the pending choice is dropped quietly.
+    // The pick is pinned to the board's project dir, and the board is shared
+    // per project root: the fresh session's cwd may be any worktree of that
+    // project (its projectRoot is not resolved yet), so write against the
+    // pinned dir rather than comparing cwds — that equality skipped the link
+    // for every worktree session. The pick is cleared whenever the composer's
+    // context leaves the project, so the pinned dir is the right board.
     const pendingPick = newSessionKanbanPendingRef.current;
     newSessionKanbanPendingRef.current = KANBAN_OFF_PENDING;
     setNewSessionKanbanPending(KANBAN_OFF_PENDING);
     if (pendingPick.kind !== "off") {
-      const dir = session.projectRoot ?? session.cwd;
-      if (dir === pendingPick.projectDir) {
-        const title = session.name || session.firstMessage || session.id;
-        if (pendingPick.kind === "new-card") {
-          kanbanCreateCardForSession(dir, session.id, title, pendingPick.laneId);
-        } else {
-          const card = kanbanBoardSnapshot(dir)?.cards.find((c) => c.id === pendingPick.cardId) ?? null;
-          if (card && card.sessionId === null) {
-            if (card.laneId === KANBAN_BACKLOG_LANE_ID) kanbanAdvanceCard(dir, card.id);
-            kanbanLinkCard(dir, card.id, session.id, title);
-          }
+      const dir = pendingPick.projectDir;
+      const title = session.name || session.firstMessage || session.id;
+      if (pendingPick.kind === "new-card") {
+        kanbanCreateCardForSession(dir, session.id, title, pendingPick.laneId);
+      } else {
+        const card = kanbanBoardSnapshot(dir)?.cards.find((c) => c.id === pendingPick.cardId) ?? null;
+        if (card && card.sessionId === null) {
+          if (card.laneId === KANBAN_BACKLOG_LANE_ID) kanbanAdvanceCard(dir, card.id);
+          kanbanLinkCard(dir, card.id, session.id, title);
         }
       }
     }
