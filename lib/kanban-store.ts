@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import lockfile from "proper-lockfile";
 import { serializeByKey } from "./key-serializer";
 import { applyKanbanAction, pruneDeadLinks } from "./kanban-shared";
@@ -16,10 +17,16 @@ import {
 import { isMcpEntryRefusal, validateMcpProject } from "./mcp-entry-request";
 import { readRegularFileText } from "./regular-file";
 import { invalidateSessionPathCache, readSessionHeader, resolveSessionPath } from "./session-reader";
-import { resolveProject } from "./worktree";
+import { listWorktrees, resolveProject } from "./worktree";
 
-// SERVER-ONLY. One board per project at `<projectDir>/.pi/kanban.json`, a
-// `{ schemaVersion, board }` envelope of pure data (never executed, never
+// SERVER-ONLY. One board per project under pi's shared agent storage:
+// `<agentDir>/kanban/<encoded-project-root>/kanban.json` (`getAgentDir()` is
+// `$PI_CODING_AGENT_DIR` or `~/.pi/agent`). The board's key is the *resolved*
+// project root — a worktree collapses to its main repo — so every checkout of
+// a repository reads and writes the one shared file instead of forking a copy
+// per worktree (the board used to live at `<projectDir>/.pi/kanban.json`; an
+// old file there is imported on first access and then deleted). The content
+// is a `{ schemaVersion, board }` envelope of pure data (never executed, never
 // treated as configuration: the project-trust gate does not apply). The rules
 // live in `lib/kanban-shared.ts`; this file is the locked, atomic file store
 // around them, patterned on `lib/session-ui-state.ts`: writes are serialized
@@ -87,14 +94,45 @@ function toFailure(error: unknown): KanbanFailure {
   return failure("internal", errorMessage(error));
 }
 
-export function getKanbanPath(cwd: string): string {
-  return join(cwd, ".pi", "kanban.json");
+/**
+ * A project root encoded as its board's directory name — the same scheme pi's
+ * session directories use for `~/.pi/agent/sessions/<encoded-cwd>/` (the SDK
+ * SessionManager's `--<path with / \ : -> -->--` encoding), so a board sits
+ * beside its project's sessions and stays human-readable.
+ */
+export function encodeBoardKey(projectRoot: string): string {
+  return `--${projectRoot.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+
+/**
+ * The shared board file of a project root: `<agentDir>/kanban/<key>/kanban.json`.
+ * Every worktree of a repository resolves to the same key, so they all read
+ * and write this one file; a non-git directory keeps its own.
+ */
+export function getKanbanPath(projectRoot: string): string {
+  return join(getAgentDir(), "kanban", encodeBoardKey(projectRoot), "kanban.json");
+}
+
+/** The pre-move location, read only to import a board on first access. */
+function legacyBoardPath(projectRoot: string): string {
+  return join(projectRoot, ".pi", "kanban.json");
+}
+
+/**
+ * The board's key for a request's cwd: the resolved project root (a worktree
+ * collapses to its main repo, the same rule the sidebar groups sessions by);
+ * anything that is not a worktree's top level keeps its own identity.
+ */
+async function boardProjectRoot(cwd: string): Promise<string> {
+  return (await resolveProject(cwd)).projectRoot;
 }
 
 /**
  * The project folder a request names, checked exactly as `/api/mcp` checks its
  * project (`validateMcpProject()`): absolute, inside the allowed roots as given,
- * and a directory. Nothing is read or written for a refused folder.
+ * and a directory. Nothing is read or written for a refused folder. The board
+ * file itself lives under the agent directory, where sessions already live, so
+ * the checked folder is the only filesystem boundary that matters.
  */
 export async function validateKanbanCwd(value: unknown): Promise<{ ok: true; cwd: string } | KanbanFailure> {
   try {
@@ -149,7 +187,7 @@ function noteWrite(path: string, before: number): void {
 export async function getBoardRevision(cwd: string): Promise<{ ok: true; revision: number } | KanbanFailure> {
   const valid = await validateKanbanCwd(cwd);
   if (!valid.ok) return valid;
-  return { ok: true, revision: revisionOf(getKanbanPath(valid.cwd)) };
+  return { ok: true, revision: revisionOf(getKanbanPath(await boardProjectRoot(valid.cwd))) };
 }
 
 export function resetKanbanStateForTests(): void {
@@ -198,7 +236,7 @@ function readCard(value: unknown): KanbanCard | null {
  * file is read leniently: a card that is not a card is skipped, a card in a
  * lane that is gone goes to the backlog unlinked, and a session carried twice
  * stays on its first card. `projectDir` is always the folder the file was read
- * from, so a project that moved on disk keeps its board.
+ * for (the board's key), so a project that moved on disk keeps its board.
  */
 function normalizeEnvelope(raw: unknown, cwd: string): KanbanBoard | null {
   if (!isRecord(raw) || typeof raw.schemaVersion !== "number") return null;
@@ -293,13 +331,103 @@ function writeBoardFile(path: string, board: KanbanBoard): void {
 }
 
 // ---------------------------------------------------------------------------
+// Migration from the old `<project>/.pi/kanban.json`
+// ---------------------------------------------------------------------------
+
+/**
+ * The board an old file held, for import: the parsed board, or null when there
+ * is nothing importable. A corrupt file is set aside beside the shared file
+ * (where corrupt boards live); a file from a newer schema is left exactly
+ * where it is, because importing it would make every later read refuse.
+ */
+function importLegacyBoard(legacy: string, projectRoot: string): KanbanBoard | null {
+  let loaded: Loaded;
+  try {
+    loaded = loadBoardFile(legacy, projectRoot);
+  } catch (error) {
+    if (error instanceof KanbanSchemaError) {
+      console.warn(`[pi-web] the old board ${legacy} has a newer schema than this pi-web; it stays in place and is not imported`);
+      return null;
+    }
+    console.warn(`[pi-web] the old board ${legacy} could not be read (${errorMessage(error)}); starting from an empty board and leaving it in place`);
+    return null;
+  }
+  if (loaded.kind === "missing") return null;
+  if (loaded.kind === "corrupt") {
+    const backup = `${getKanbanPath(projectRoot)}.corrupt-${Date.now()}`;
+    try {
+      renameSync(legacy, backup);
+      console.warn(`[pi-web] the old board ${legacy} could not be parsed; moved it to ${backup} and started from an empty board`);
+    } catch (error) {
+      console.warn(`[pi-web] the old board ${legacy} could not be parsed and could not be moved aside (${errorMessage(error)}); starting from an empty board, leaving it in place`);
+    }
+    return null;
+  }
+  return loaded.board;
+}
+
+/** The linked worktrees of a repository (the main checkout excluded), or none when it is not a repository. */
+async function worktreePaths(projectRoot: string): Promise<string[]> {
+  try {
+    const worktrees = await listWorktrees(projectRoot);
+    return worktrees.filter((worktree) => !worktree.isMain).map((worktree) => worktree.path);
+  } catch {
+    return [];
+  }
+}
+
+type Seed = { board: KanbanBoard; migratedFrom: string | null };
+
+/**
+ * What a missing shared file starts from: the project's old
+ * `<projectRoot>/.pi/kanban.json` when it holds a board; failing that, the
+ * newest such file one of the repository's worktrees kept (a board forked
+ * there before the move) — only the newest, so a discarded corrupt one never
+ * falls back to an older, staler state; failing that, the empty default. The
+ * caller deletes the imported file once the shared one is written.
+ */
+async function seedBoard(projectRoot: string): Promise<Seed> {
+  const legacy = legacyBoardPath(projectRoot);
+  if (existsSync(legacy)) {
+    const board = importLegacyBoard(legacy, projectRoot);
+    return { board: board ?? emptyBoard(projectRoot), migratedFrom: board ? legacy : null };
+  }
+  const candidates: string[] = [];
+  for (const worktree of await worktreePaths(projectRoot)) {
+    const candidate = join(worktree, ".pi", "kanban.json");
+    try {
+      if (statSync(candidate).isFile()) candidates.push(candidate);
+    } catch {
+      // No file there.
+    }
+  }
+  candidates.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+  const newest = candidates[0];
+  if (newest) {
+    const board = importLegacyBoard(newest, projectRoot);
+    if (board) return { board, migratedFrom: newest };
+  }
+  return { board: emptyBoard(projectRoot), migratedFrom: null };
+}
+
+/** The imported file is deleted once its content is safe in the shared file; best effort. */
+function deleteImportedFile(path: string): void {
+  try {
+    unlinkSync(path);
+    console.warn(`[pi-web] the board moved from ${path} to the shared agent storage; the old file was deleted`);
+  } catch (error) {
+    console.warn(`[pi-web] the board was imported from ${path} but the old file could not be deleted (${errorMessage(error)}); delete it manually`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
 
 /**
- * Whether the session's file exists and belongs to this project: its header's
- * folder is `cwd`, or a worktree whose project root is `cwd` (the board lives
- * at the project root; a session may run in one of its worktrees).
+ * Whether the session's file exists and belongs to this board's project: its
+ * header's folder is the project root, or a worktree of it (a session may
+ * run in any checkout of the repository).
  */
 export async function validateSession(cwd: string, sessionId: string): Promise<boolean> {
   if (typeof sessionId !== "string" || !sessionId) return false;
@@ -345,13 +473,14 @@ type EditResult = { board: KanbanBoard } | { refused: true };
 type Edited = { ok: true; board: KanbanBoard; revision: number } | { ok: false; refused: true };
 
 /**
- * Under the in-process queue and the file's lock: reads the board (a missing
- * file starts a default one, an unparsable file is set aside for one), applies
- * `edit`, and replaces the file when the edit returned a different board, or
- * the board was started fresh. A refused edit writes nothing but a fresh board.
+ * Under the in-process queue and the file's lock: reads the shared board (a
+ * missing file is seeded by the migration or started with the default lanes,
+ * an unparsable file is set aside for one), applies `edit`, and replaces the
+ * file when the edit returned a different board, or the file had to be
+ * materialized. A refused edit writes nothing but a newly materialized file.
  */
-function editBoard(cwd: string, edit: (board: KanbanBoard, now: number) => Promise<EditResult>): Promise<Edited> {
-  const path = getKanbanPath(cwd);
+function editBoard(projectRoot: string, edit: (board: KanbanBoard, now: number) => Promise<EditResult>): Promise<Edited> {
+  const path = getKanbanPath(projectRoot);
   return serializeByKey(QUEUE_KEY, path, async () => {
     mkdirSync(dirname(path), { recursive: true });
     let release: () => Promise<void>;
@@ -362,28 +491,39 @@ function editBoard(cwd: string, edit: (board: KanbanBoard, now: number) => Promi
       throw error;
     }
     try {
-      const loaded = loadBoardFile(path, cwd);
+      const loaded = loadBoardFile(path, projectRoot);
       let board: KanbanBoard;
-      let fresh = false;
+      let migratedFrom: string | null = null;
+      const materialize = loaded.kind !== "ok";
       if (loaded.kind === "ok") {
         board = loaded.board;
       } else {
         if (loaded.kind === "corrupt") backUpCorruptFile(path);
-        board = emptyBoard(cwd);
-        fresh = true;
+        if (loaded.kind === "missing") {
+          const seed = await seedBoard(projectRoot);
+          board = seed.board;
+          migratedFrom = seed.migratedFrom;
+        } else {
+          board = emptyBoard(projectRoot);
+        }
       }
       const before = revisionOf(path);
       const result = await edit(board, Date.now());
       if ("refused" in result) {
-        if (fresh) {
+        // Even a refused action materializes a missing file (with the
+        // imported board, when there was one to import), so the next read
+        // sees a real board with a real revision.
+        if (materialize) {
           writeBoardFile(path, board);
           noteWrite(path, before);
+          if (migratedFrom) deleteImportedFile(migratedFrom);
         }
         return { ok: false as const, refused: true as const };
       }
-      if (fresh || result.board !== board) {
+      if (materialize || result.board !== board) {
         writeBoardFile(path, result.board);
         noteWrite(path, before);
+        if (migratedFrom) deleteImportedFile(migratedFrom);
       }
       return { ok: true as const, board: result.board, revision: revisionOf(path) };
     } finally {
@@ -397,28 +537,31 @@ function editBoard(cwd: string, edit: (board: KanbanBoard, now: number) => Promi
 }
 
 /**
- * The project's board. A missing file is created with the default lanes and no
- * cards; an unparsable one is set aside and replaced. Cards whose session no
- * longer exists are unlinked (lane and snapshot title kept) and, when that
- * changes the board, written back through the locked path. With
- * `{ create: false }` a missing or unusable file yields the empty board and
- * revision 0 without any write: for the watchers that must not create files.
+ * The project's board. A missing shared file is seeded by the migration (the
+ * project's old `.pi/kanban.json`, or a worktree's copy of it) and written
+ * with the default lanes when there is nothing to import; an unparsable one is
+ * set aside and replaced. Cards whose session no longer exists are unlinked
+ * (lane and snapshot title kept) and, when that changes the board, written
+ * back through the locked path. With `{ create: false }` a missing or
+ * unusable file yields the empty board and revision 0 without any write or
+ * import: for the watchers that must not create files.
  */
 export async function readBoard(cwd: string, options: { create?: boolean } = {}): Promise<KanbanBoardResult> {
   const valid = await validateKanbanCwd(cwd);
   if (!valid.ok) return valid;
+  const projectRoot = await boardProjectRoot(valid.cwd);
   try {
-    const path = getKanbanPath(valid.cwd);
-    const loaded = loadBoardFile(path, valid.cwd);
+    const path = getKanbanPath(projectRoot);
+    const loaded = loadBoardFile(path, projectRoot);
     if (loaded.kind === "ok") {
       const board = loaded.board;
       if (options.create === false) return { ok: true, board, revision: revisionOf(path) };
-      const alive = await aliveSessions(valid.cwd, board);
+      const alive = await aliveSessions(projectRoot, board);
       if (linkedSessionIds(board).every((id) => alive.has(id))) return { ok: true, board, revision: revisionOf(path) };
     } else if (options.create === false) {
-      return { ok: true, board: emptyBoard(valid.cwd), revision: 0 };
+      return { ok: true, board: emptyBoard(projectRoot), revision: 0 };
     }
-    const edited = await editBoard(valid.cwd, async (board, now) => ({ board: await pruneBoard(valid.cwd, board, now) }));
+    const edited = await editBoard(projectRoot, async (board, now) => ({ board: await pruneBoard(projectRoot, board, now) }));
     return edited.ok ? edited : failure("internal", "The board could not be read");
   } catch (error) {
     return toFailure(error);
@@ -443,19 +586,20 @@ function actionSessionId(action: KanbanAction): string | null {
  * (`session-missing`), then under the lock the reducer for the action runs on
  * the freshly read board; a refusal by the rules is `refused`. The resulting
  * board is pruned of dead links, written atomically, and returned with its new
- * revision. A refusal writes nothing.
+ * revision. A refusal writes nothing but a newly materialized file.
  */
 export async function applyMutation(cwd: string, action: KanbanAction): Promise<KanbanBoardResult> {
   const valid = await validateKanbanCwd(cwd);
   if (!valid.ok) return valid;
+  const projectRoot = await boardProjectRoot(valid.cwd);
   try {
     const sessionId = actionSessionId(action);
-    if (sessionId !== null && !(await validateSession(valid.cwd, sessionId))) {
+    if (sessionId !== null && !(await validateSession(projectRoot, sessionId))) {
       return failure("session-missing", "That session does not exist in this project");
     }
-    const edited = await editBoard(valid.cwd, async (board, now) => {
+    const edited = await editBoard(projectRoot, async (board, now) => {
       const next = applyKanbanAction(board, action, now);
-      return next ? { board: await pruneBoard(valid.cwd, next, now) } : { refused: true };
+      return next ? { board: await pruneBoard(projectRoot, next, now) } : { refused: true };
     });
     return edited.ok ? edited : failure("refused", `The board's rules refuse "${action.action}" here`);
   } catch (error) {

@@ -46,6 +46,7 @@ next-env.d.ts
 e2e_*.mjs
 
 .pi/
+.context/
 GOAL.md
 check.sh
 ASSUMPTIONS.md
