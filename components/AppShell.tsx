@@ -1346,7 +1346,8 @@ export function AppShell() {
     newSessionBarFocusRef.current = null;
   }, []);
   const showChat = selectedSession !== null || effectiveNewSessionCwd !== null;
-  // Kanban: one board per project directory (`.pi/kanban.json`), created on
+  // Kanban: one board per project directory, shared by all its worktrees
+  // (stored under the agent dir, `lib/kanban-store.ts`), created on
   // demand for every project. The center switches between the chat and that
   // project's board; the chat keeps a thin strip with this session's card.
   const composerBoardDir = selectedSession === null && effectiveNewSessionCwd

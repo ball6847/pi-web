@@ -1,15 +1,10 @@
 ---
 createdAt: "2026-10-19T00:00:00Z"
-implementedAt: null
+implementedAt: "2026-10-19"
 reviewedAt: null
-# SIGN-OFF: PENDING — GOAL.md requires the operator's sign-off in this header
-# before any M4 (shared storage) coding starts. The continuous-improvement
-# loop must not implement this plan until a line like
-# `signoff: "<operator>, <date>"` is added below.
-signoff: null
-# The sign-off should also settle the two open questions in Design
-# (Q1 board-key scheme, Q2 migration policy); the recommendations below
-# are the default the loop follows if the operator signs off as-is.
+# SIGN-OFF: the operator (ball6847) signed off 2026-10-19, accepting both open
+# questions as recommended (their resolutions are recorded in Design below).
+signoff: "ball6847, 2026-10-19"
 ---
 
 # Plan: Move the kanban board from the project checkout to pi's shared agent storage
@@ -67,23 +62,30 @@ The one-line core change, plus the two decisions the sign-off settles:
                                             (all store machinery unchanged)
 ```
 
-- **Q1 — the board key.** Recommendation: the **encoded project root
-  path**, using the same encoding pi's session directories use for
-  `~/.pi/agent/sessions/<encoded-cwd>/` (the SDK `SessionManager` path
-  scheme — reuse it, do not invent a new one). Human-readable in the
-  agent dir, stable across renames of individual worktrees (the key is
-  the *project root*, which a worktree resolution already canonicalizes),
-  unique per project. Alternative (not recommended): a short hash of the
-  path — opaque, and a hash-collision policy would have to be invented.
-- **Q2 — migration of existing boards.** Recommendation: **import-on-first
-  read, then delete the legacy file.** At the first *creating* read for a
-  project whose legacy `<project>/.pi/kanban.json` exists and whose shared
-  file does not: read the legacy bytes through the existing (corrupt-safe)
-  reader, write them to the shared path (atomic), delete the legacy file
-  (its corrupt sibling, if any, goes with the set-aside rules). A later
-  read never touches the legacy path. Alternative (not recommended):
-  leave the file in place — two boards for one project, exactly the bug
-  being fixed.
+- **Q1 — the board key.** **Resolved (2026-10-19): the encoded project root
+  path, as recommended** — `getKanbanPath(projectRoot)` =
+  `join(getAgentDir(), "kanban", encodeBoardKey(projectRoot), "kanban.json")`,
+  where `encodeBoardKey` is the SDK SessionManager encoding
+  (`--<path with `/`, `\` and `:` replaced by `-`>--`). One refinement over the
+  recommendation: a **directory per project** (`<key>/kanban.json`) instead of a
+  flat `<key>.json`, so per-project artifacts (corrupt set-asides, future ones)
+  live beside the board without inventing sibling-file names. Rationale as
+  recommended: human-readable in the agent dir, stable across renames of
+  individual worktrees (the key is the *project root*, which a worktree
+  resolution already canonicalizes), unique per project. Alternative (not
+  recommended): a short hash of the path — opaque, and a hash-collision policy
+  would have to be invented.
+- **Q2 — migration of existing boards.** **Resolved (2026-10-19): import-on-
+  first read, then delete the legacy file, as recommended** — implemented with
+  one extension the recommendation left open: when the *main checkout* has no
+  legacy file, the newest legacy file kept by one of the repository's
+  worktrees (a board forked there before the move) is imported instead, so a
+  project is not stranded because its newest board copy happened to live in a
+  worktree. Only the imported file is deleted (a corrupt legacy is set aside
+  beside the shared file; a newer-schema legacy is left in place, not
+  imported). A later read never touches the legacy path. Alternative (not
+  recommended): leave the file in place — two boards for one project, exactly
+  the bug being fixed.
 - **No path leaks**: the key is computed from the resolved project root, so
   a worktree cwd, a subdirectory cwd, and the top-level cwd all map to the
   same file (same canonicalization `resolveProject` already does for the
@@ -97,7 +99,7 @@ The one-line core change, plus the two decisions the sign-off settles:
 
 | # | Case | Expectation |
 |---|------|-------------|
-| 1 | Creating GET for project P | file at `~/.pi/agent/kanban/<key(P)>.json`; no `.pi/kanban.json` under P |
+| 1 | Creating GET for project P | file at `<agentDir>/kanban/<key(P)>/kanban.json`; no `.pi/kanban.json` under P |
 | 2 | `?create=0` (no board yet) | shared file **not** created (the creating-read rule survives the move) |
 | 3 | Worktrees A and B of P: mutate in A, read from B | B's read sees A's card; one file on disk |
 | 4 | Legacy board exists, shared absent | import-on-first-read: cards/lanes/schema moved, legacy file deleted, revision continues |
@@ -105,7 +107,7 @@ The one-line core change, plus the two decisions the sign-off settles:
 | 6 | Projects P and Q | two distinct shared files; no cross-contamination |
 | 7 | Existing store tests (lock, corrupt, mode, cap, revision, schema) | all green at the new path, unchanged |
 | 8 | Route tests (all 12 actions, gates, pruning) | all green; responses byte-identical in shape |
-| 9 | Docs | **Not built** entry gone; File section names location/key/migration; M3 section replaced; check.sh M3 predicate updated to match |
+| 9 | Docs | **Not built** entry gone; File section names location/key/migration; M3 section replaced; check.sh M3 predicate updated to the M4 one |
 | 10 | Client | `/api/kanban` URL and response shape unchanged; no new i18n keys |
 
 ### Rollout
