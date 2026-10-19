@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import type { NewSessionContext, NewSessionTarget, ProjectChoice } from "@/lib/new-session-context";
 import { focusIfLost } from "@/lib/stacked-dialog";
-import type { KanbanLane } from "@/lib/kanban-types";
+import type { KanbanCard, KanbanLane, KanbanNewSessionPending, KanbanNewSessionPick } from "@/lib/kanban-types";
 import { ChevronIcon } from "./SidebarIcons";
 import { ProjectWorktreePicker, type ProjectWorktreeControl, type ProjectWorktreePickerHandle } from "./ProjectWorktreePicker";
 
@@ -13,15 +13,19 @@ import { ProjectWorktreePicker, type ProjectWorktreeControl, type ProjectWorktre
 export type NewSessionContextControl = ProjectWorktreeControl;
 
 /**
- * The board choice of the fresh composer (UI design phase): whether the new
- * session starts tracked on the project's kanban board, and in which lane.
- * `null` = off. The shell keeps the choice and applies it when the session
- * gets its id.
+ * The board choice of the fresh composer: what its session does on the
+ * project's board once it exists — nothing, a new card in a lane, or a link
+ * onto an existing sessionless card. The shell keeps the choice (pinned to
+ * the board's project root) and applies it when pi answers with the session
+ * id. The board card menu's "Start session" opens the composer with the
+ * attach form pre-picked, so both directions meet in this one control.
  */
 export interface NewSessionBoardChoice {
   lanes: KanbanLane[];
-  laneId: string | null;
-  onLaneChange(laneId: string | null): void;
+  /** The board's sessionless cards, for "Attach to card" (the shell filters). */
+  cards: KanbanCard[];
+  pending: KanbanNewSessionPending;
+  onChange(pick: KanbanNewSessionPick): void;
 }
 
 interface Props {
@@ -155,8 +159,12 @@ export function NewSessionContextBar({
         onCreateWorktree={onCreateWorktree}
       />
       {board && (() => {
-        const lane = board.lanes.find((l) => l.id === board.laneId) ?? null;
-        const label = lane ? lane.name : t("kanban.composerOff");
+        const pending = board.pending;
+        const label = pending.kind === "off"
+          ? t("kanban.composerOff")
+          : pending.kind === "new-card"
+            ? board.lanes.find((l) => l.id === pending.laneId)?.name ?? t("kanban.composerOff")
+            : pending.cardTitle;
         return (
           <div className="project-picker is-inline" role="group" aria-label={t("kanban.composerTrack")}>
             <button
@@ -179,9 +187,76 @@ export function NewSessionContextBar({
             </button>
             {boardMenu && (() => {
               const left = Math.min(Math.max(boardMenu.anchor.left, 8), Math.max(8, window.innerWidth - 208));
-              const top = boardMenu.anchor.bottom + 6 + (board.lanes.length + 1) * 28 + 12 > window.innerHeight
-                ? Math.max(8, boardMenu.anchor.top - (board.lanes.length + 1) * 28 - 12)
+              // Rows: the off choice, the "New card in" lanes, and the
+              // "Attach to card" list (capped like the strip's attach menu;
+              // with no cards, its one disabled line stands in).
+              const attachCards = board.cards.slice(0, 8);
+              const menuHeight = (1 + board.lanes.length + (board.cards.length > 0 ? attachCards.length : 1)) * 28 + 44 + 16;
+              const top = boardMenu.anchor.bottom + 6 + menuHeight > window.innerHeight
+                ? Math.max(8, boardMenu.anchor.top - menuHeight)
                 : boardMenu.anchor.bottom + 6;
+              const maxHeight = Math.max(120, window.innerHeight - top - 8);
+              const menuItem = (key: string, opts: {
+                label: string;
+                selected: boolean;
+                disabled?: boolean;
+                disabledTitle?: string;
+                title?: string;
+                trailing?: React.ReactNode;
+                onSelect?: () => void;
+              }) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={opts.selected}
+                  disabled={opts.disabled}
+                  title={opts.disabled ? opts.disabledTitle : opts.title ?? opts.label}
+                  onClick={() => {
+                    if (opts.disabled) return;
+                    opts.onSelect?.();
+                    setBoardMenu(null);
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 7,
+                    width: "100%",
+                    padding: "6px 8px",
+                    border: "none",
+                    borderRadius: 5,
+                    background: "none",
+                    color: opts.disabled ? "var(--text-dim)" : "var(--text)",
+                    opacity: opts.disabled ? 0.55 : 1,
+                    cursor: opts.disabled ? "default" : "pointer",
+                    fontSize: 12,
+                    textAlign: "left",
+                  }}
+                  onMouseEnter={(e) => { if (!opts.disabled) e.currentTarget.style.background = "var(--bg-hover)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
+                >
+                  <span style={{ width: 10, display: "inline-flex", flexShrink: 0, color: opts.selected ? "var(--accent)" : "transparent" }} aria-hidden="true">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                  </span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{opts.label}</span>
+                  {opts.trailing}
+                </button>
+              );
+              const sectionLabel = (key: string, sectionLabel: string) => (
+                <div
+                  key={key}
+                  style={{
+                    padding: "7px 8px 2px",
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    color: "var(--text-dim)",
+                    textTransform: "uppercase" as const,
+                    letterSpacing: 0.4,
+                  }}
+                >
+                  {sectionLabel}
+                </div>
+              );
               return createPortal(
                 <div
                   data-kanban-board-choice
@@ -190,6 +265,8 @@ export function NewSessionContextBar({
                     position: "fixed",
                     left,
                     top,
+                    maxHeight,
+                    overflowY: "auto" as const,
                     zIndex: 650,
                     width: 196,
                     background: "var(--bg-panel)",
@@ -199,52 +276,38 @@ export function NewSessionContextBar({
                     padding: 4,
                   }}
                 >
-                  {[
-                    { id: null as string | null, name: t("kanban.composerOff"), fixed: false, title: t("kanban.composerOffTitle") },
-                    // The backlog option is disabled, and its tooltip says why; other lanes are user data.
-                    ...board.lanes.map((l) => ({ id: l.id, name: l.name, fixed: Boolean(l.fixed), title: l.fixed ? t("kanban.backlogNoSessions") : l.description || l.name })),
-                  ].map((option) => {
-                    // The backlog never takes a session, so a tracked start there is refused.
-                    const disabled = option.fixed;
-                    const selected = board.laneId === option.id;
-                    return (
-                      <button
-                        key={option.id ?? "off"}
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={selected}
-                        disabled={disabled}
-                        title={disabled ? option.title : option.name}
-                        onClick={() => {
-                          if (disabled) return;
-                          board.onLaneChange(option.id);
-                          setBoardMenu(null);
-                        }}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 7,
-                          width: "100%",
-                          padding: "6px 8px",
-                          border: "none",
-                          borderRadius: 5,
-                          background: "none",
-                          color: disabled ? "var(--text-dim)" : "var(--text)",
-                          opacity: disabled ? 0.55 : 1,
-                          cursor: disabled ? "default" : "pointer",
-                          fontSize: 12,
-                          textAlign: "left",
-                        }}
-                        onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.background = "var(--bg-hover)"; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.background = "none"; }}
-                      >
-                        <span style={{ width: 10, display: "inline-flex", flexShrink: 0, color: selected ? "var(--accent)" : "transparent" }} aria-hidden="true">
-                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-                        </span>
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{option.name}</span>
-                      </button>
-                    );
+                  {menuItem("off", {
+                    label: t("kanban.composerOff"),
+                    selected: pending.kind === "off",
+                    title: t("kanban.composerOffTitle"),
+                    onSelect: () => board.onChange({ kind: "off" }),
                   })}
+                  {sectionLabel("new-card", t("kanban.composerNewCardSection"))}
+                  {/* The backlog option is disabled, and its tooltip says why; other lanes are user data. */}
+                  {board.lanes.map((l) =>
+                    menuItem(l.id, {
+                      label: l.name,
+                      selected: pending.kind === "new-card" && pending.laneId === l.id,
+                      disabled: Boolean(l.fixed),
+                      disabledTitle: l.fixed ? t("kanban.backlogNoSessions") : undefined,
+                      title: l.description || l.name,
+                      onSelect: () => board.onChange({ kind: "new-card", laneId: l.id }),
+                    }))}
+                  {sectionLabel("attach", t("kanban.composerAttachSection"))}
+                  {board.cards.length === 0
+                    ? menuItem("no-cards", { label: t("kanban.composerNoCards"), selected: false, disabled: true })
+                    : attachCards.map((c) =>
+                      menuItem(c.id, {
+                        label: c.title,
+                        selected: pending.kind === "attach" && pending.cardId === c.id,
+                        trailing: (() => {
+                          const laneName = board.lanes.find((l) => l.id === c.laneId)?.name;
+                          return laneName ? (
+                            <span style={{ flexShrink: 0, maxWidth: 64, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10.5, color: "var(--text-dim)" }}>{laneName}</span>
+                          ) : null;
+                        })(),
+                        onSelect: () => board.onChange({ kind: "attach", cardId: c.id, cardTitle: c.title }),
+                      }))}
                 </div>,
                 document.body,
               );

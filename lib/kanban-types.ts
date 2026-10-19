@@ -43,6 +43,26 @@ export interface KanbanEnvelope {
 /** The id of the fixed first lane of every board. */
 export const KANBAN_BACKLOG_LANE_ID = "lane-backlog";
 
+/**
+ * What a fresh composer's session will do on the board once it exists: nothing,
+ * a new card in a lane, or a link onto an existing sessionless card. The
+ * composer's "Track on board" control picks it, and the board card menu's
+ * "Start session" pre-picks the attach form. Before the session exists it is
+ * only a plan; the shell applies it when pi answers with the real session id.
+ */
+export type KanbanNewSessionPick =
+  | { kind: "off" }
+  | { kind: "new-card"; laneId: string }
+  | { kind: "attach"; cardId: string; cardTitle: string };
+
+/** A pick held by the shell, pinned to the board (project root) it was made for. */
+export type KanbanNewSessionPending =
+  | { kind: "off" }
+  | { kind: "new-card"; projectDir: string; laneId: string }
+  | { kind: "attach"; projectDir: string; cardId: string; cardTitle: string };
+
+export const KANBAN_OFF_PENDING: KanbanNewSessionPending = { kind: "off" };
+
 export function makeKanbanId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();

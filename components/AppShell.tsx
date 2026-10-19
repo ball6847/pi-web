@@ -16,12 +16,28 @@ import { KanbanLaneStrip } from "./KanbanLaneStrip";
 import { cardForSession } from "@/lib/kanban-shared";
 import {
   kanbanAdvanceCard,
+  kanbanBoardSnapshot,
+  kanbanBoardSnapshot,
   kanbanCreateCardForSession,
   kanbanLinkCard,
   kanbanUnlinkCard,
   useKanbanBoard,
   useKanbanSessionIndex,
 } from "@/lib/kanban";
+import {
+  KANBAN_BACKLOG_LANE_ID,
+  KANBAN_OFF_PENDING,
+  type KanbanCard,
+  type KanbanNewSessionPending,
+  type KanbanNewSessionPick,
+} from "@/lib/kanban-types";
+import {
+  KANBAN_BACKLOG_LANE_ID,
+  KANBAN_OFF_PENDING,
+  type KanbanCard,
+  type KanbanNewSessionPending,
+  type KanbanNewSessionPick,
+} from "@/lib/kanban-types";
 import { ProjectTrustDialog, type ProjectTrustFailure } from "./ProjectTrustDialog";
 import { BranchNavigator, hasSessionBranches } from "./BranchNavigator";
 import { SystemPromptPanel } from "./SystemPromptPanel";
@@ -248,9 +264,9 @@ export function AppShell() {
   const [boardProjectDir, setBoardProjectDir] = useState<string | null>(null);
   const [boardHighlightCardId, setBoardHighlightCardId] = useState<string | null>(null);
   const boardHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [newSessionKanbanLaneId, setNewSessionKanbanLaneId] = useState<string | null>(null);
-  const newSessionKanbanLaneIdRef = useRef<string | null>(null);
-  newSessionKanbanLaneIdRef.current = newSessionKanbanLaneId;
+  const [newSessionKanbanPending, setNewSessionKanbanPending] = useState<KanbanNewSessionPending>(KANBAN_OFF_PENDING);
+  const newSessionKanbanPendingRef = useRef<KanbanNewSessionPending>(KANBAN_OFF_PENDING);
+  newSessionKanbanPendingRef.current = newSessionKanbanPending;
   const kanbanSessionIndex = useKanbanSessionIndex();
   const desktopSidebarOpenRef = useRef(!initialNavigation.sidebarCollapsed);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
@@ -1001,12 +1017,29 @@ export function AppShell() {
     hydrateSelectedSession(session.id);
     router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
     // Kanban: the composer's "track on board" choice becomes the session's card.
-    const laneId = newSessionKanbanLaneIdRef.current;
-    if (laneId) {
-      const title = session.name || session.firstMessage || session.id;
-      kanbanCreateCardForSession(session.projectRoot ?? session.cwd, session.id, title, laneId);
+    const pendingPick = newSessionKanbanPendingRef.current;
+    newSessionKanbanPendingRef.current = KANBAN_OFF_PENDING;
+    setNewSessionKanbanPending(KANBAN_OFF_PENDING);
+    if (pendingPick.kind !== "off") {
+      const dir = session.projectRoot ?? session.cwd;
+      if (dir === pendingPick.projectDir) {
+        const title = session.name || session.firstMessage || session.id;
+        if (pendingPick.kind === "new-card") {
+          kanbanCreateCardForSession(dir, session.id, title, pendingPick.laneId);
+        } else {
+          // Attach to the existing card. The backlog never takes a session, so
+          // a backlog card first advances one lane (its first work lane) and
+          // then links; the store's reducers fold both optimistically, in this
+          // order. A card that meanwhile got linked or deleted is refused and
+          // the pending choice is dropped quietly.
+          const card = kanbanBoardSnapshot(dir)?.cards.find((c) => c.id === pendingPick.cardId) ?? null;
+          if (card && card.sessionId === null) {
+            if (card.laneId === KANBAN_BACKLOG_LANE_ID) kanbanAdvanceCard(dir, card.id);
+            kanbanLinkCard(dir, card.id, session.id, title);
+          }
+        }
+      }
     }
-    newSessionKanbanLaneIdRef.current = null;
   }, [invalidateWorkspaceRestore, router, hydrateSelectedSession]);
 
   const deliverSessionNotification = useCallback(({

@@ -523,12 +523,23 @@ export function acquireBoardWatcherForTests(key: string, creating = false): () =
 
 /**
  * The board a `useKanbanBoard` subscriber would see, without a renderer:
- * `adopt` keeps the old object when a refetch's JSON is identical, so this
- * reference is stable across an unchanged poll — export it so node tests can
- * pin that rule (the store's resetKanbanStateForTests pattern).
+ * the shown board (server board + pending writes) or null. The shell reads it
+ * outside a component's render — a fresh composer's pending attach, applied
+ * when pi answers with the real session id — so the decision uses the board
+ * as it stands at that moment, not the closure's possibly stale copy.
+ */
+export function kanbanBoardSnapshot(projectDir: string): KanbanBoard | null {
+  return entries.get(projectDir)?.board ?? null;
+}
+
+/**
+ * `adopt` keeps the old object when a refetch's JSON is identical, so a
+ * snapshot's reference is stable across an unchanged poll — export the read
+ * under the tests' name too, so node tests can pin that rule (the store's
+ * resetKanbanStateForTests pattern).
  */
 export function kanbanBoardSnapshotForTests(projectDir: string): KanbanBoard | null {
-  return entries.get(projectDir)?.board ?? null;
+  return kanbanBoardSnapshot(projectDir);
 }
 
 /**
