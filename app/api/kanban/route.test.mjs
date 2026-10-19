@@ -218,6 +218,17 @@ test("a POST link-session for a session that does not exist in the project is a 
   assert.equal(linked.body.board.cards.find((c) => c.id === "c1").sessionId, "real-1");
 });
 
+test("a POST add-card with a session into the fixed backlog is a 400 refused and writes nothing", async (t) => {
+  const f = fixture(t);
+  await post({ cwd: f.project, action: "add-card", laneId: "lane-todo", title: "Existing" }); // materialize the board
+  const before = f.file();
+  fabricateSession(f.agentDir, f.project, "real-1");
+  const refused = await post({ cwd: f.project, action: "add-card", laneId: "lane-backlog", title: "Tracked", sessionId: "real-1", sessionTitle: "Real" });
+  assert.equal(refused.status, 400);
+  assert.equal(refused.body.code, "refused");
+  assert.equal(JSON.stringify(f.file()), JSON.stringify(before), "the refusal writes nothing");
+});
+
 test("a POST mutation round-trips to the file and bumps the revision", async (t) => {
   const f = fixture(t);
   const base = await get(f.project);
