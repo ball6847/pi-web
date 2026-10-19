@@ -68,11 +68,22 @@ SDK surface (verified against the installed pi 1.2.0 — `dist/core/extensions/t
 - `execute(toolCallId, params, signal, onUpdate, ctx)` resolves to an
   `AgentToolResult` (`{ content: [{ type: "text", text }], details }`): the model
   sees the text, `details` feeds the transcript UI.
-- `parameters` is a TypeBox schema. `typebox` 1.3.27 is a direct dependency of
-  pi-coding-agent and already sits in the tree; load it through the existing
-  `lib/pi-sdk-internals.ts` loader (the repo's pattern for SDK modules the package
-  root does not export) so pi-web's `package.json` gains no new entry (loop rule:
-  no new dependencies without operator approval).
+- `parameters` is a TypeBox schema — and the repo pattern is plain imports,
+  verified in `lib/subagent-extension.ts` (the template this tool will copy):
+  `import { Type } from "@earendil-works/pi-ai"` (pi-ai 1.2.0, an existing
+  declared dependency) and `import { defineTool } from
+  "@earendil-works/pi-coding-agent"` (the public entry). No pi-sdk-internals
+  loader and no new dependency needed.
+- The subagent built-in fixes the exact field set M4 will use: `name`, `label`,
+  `description`, `promptSnippet`, `promptGuidelines`, `exposure`,
+  `executionMode`, `parameters: Type.Object({…})`, and
+  `execute(toolCallId, params, signal, onUpdate, ctx)` — `ctx` is the
+  `ExtensionContext` the handler needs (the subagent runtime reads the parent
+  session the same way: `ctx` → session id).
+- Caveat: the codemode self-test runs `definition.execute(…, undefined as never)`
+  — a ctx-less probe. A tool that reads `ctx` (kanban_advance is one) cannot
+  use that pattern; its coverage comes from the store tests and the route tests
+  around the same `applyMutation` call.
 - `promptSnippet` / `promptGuidelines` exist on `ToolDefinition` — the "when to
   call it" guidance belongs in `promptGuidelines`, not only the description.
 - A registered tool is `direct` exposure, `defaultActive: true` — on the moment the
