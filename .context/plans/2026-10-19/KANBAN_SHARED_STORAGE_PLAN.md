@@ -32,7 +32,10 @@ signoff: null
 - **Related Decisions**: the "committable board" property is dropped **by
   design** (the whole point). The M3 `.gitignore` guidance in
   `docs/agents/kanban.md` becomes obsolete and is replaced by a migration
-  note in the same section.
+  note in the same section. **Predecessor**: the current location was the
+  user-chosen option 1 of `KANBAN_REAL_API_PLAN.md` (this folder,
+  implemented 2026-10-18); its post-implementation notes now carry the
+  supersession pointer back to this plan.
 
 ## Key Information
 

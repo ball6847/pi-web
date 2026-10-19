@@ -537,4 +537,12 @@ No mock code remains. Rollback is one git revert.
 
 - Two "mock behavior" claims in this plan were wrong: the mock never had `moveCardToLane` (only `advanceCard`) and had no sessionless→work-lane guard; `kanban-shared` adds both. The mock's `deleteLane` refused non-empty lanes (it did not relocate); the API now relocates, while the UI keeps the refusal to avoid silently unlinking live sessions.
 - `GET ?cwd=&create=0` (non-creating read) was added after review: the strip and composer watchers use it, so merely selecting a session never creates `.pi/kanban.json`; only the board view creates.
-- `docs/agents/kanban.md` is the current source of truth for all of this.
+- The final revision-poll cadence is 2.5 s (`KANBAN_POLL_MS`); TC-04's "~2 s" predates the final value.
+- **Superseded storage decision**: the Related-Decision above (option 1, `git-committable`,
+  "Rejected: `~/.pi/agent/kanban/…`") was overridden by the operator's 2026-10-19
+  milestone (GOAL.md M4): per-project storage forks per worktree and drags task
+  data through version control, so the board moves to `~/.pi/agent/kanban/` and
+  the committable property is dropped by design. See
+  `KANBAN_SHARED_STORAGE_PLAN.md` in this folder (pending sign-off); when it
+  lands, this plan's file-location references describe history, not current
+  behavior. `docs/agents/kanban.md` remains the current source of truth.
