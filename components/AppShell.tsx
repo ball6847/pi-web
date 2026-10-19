@@ -1497,8 +1497,20 @@ export function AppShell() {
       onTrack={(laneId, cardId) => {
         if (!selectedSession || !kanbanContextDir) return;
         const title = selectedSession.name || selectedSession.firstMessage || selectedSession.id;
-        if (cardId) kanbanLinkCard(kanbanContextDir, cardId, selectedSession.id, title);
-        else kanbanCreateCardForSession(kanbanContextDir, selectedSession.id, title, laneId);
+        if (cardId) {
+          // The attach menu lists every sessionless card, which under the
+          // board's rules rests only in the fixed backlog — and the store
+          // refuses to link a backlog card. Advance one lane first (the same
+          // advance-then-link the composer's consume does); a card that
+          // meanwhile got linked or deleted is dropped quietly.
+          const card = kanbanBoardSnapshot(kanbanContextDir)?.cards.find((c) => c.id === cardId) ?? null;
+          if (card && card.sessionId === null) {
+            if (card.laneId === KANBAN_BACKLOG_LANE_ID) kanbanAdvanceCard(kanbanContextDir, card.id);
+            kanbanLinkCard(kanbanContextDir, card.id, selectedSession.id, title);
+          }
+        } else {
+          kanbanCreateCardForSession(kanbanContextDir, selectedSession.id, title, laneId);
+        }
       }}
       onUnlink={() => {
         if (sessionBoardCard && kanbanContextDir) kanbanUnlinkCard(kanbanContextDir, sessionBoardCard.id);
