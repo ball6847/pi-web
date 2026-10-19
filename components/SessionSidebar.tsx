@@ -229,6 +229,10 @@ interface Props {
    *  Lets the app play a cross-workspace completion tone. */
   onBackgroundTaskDone?: () => void;
   onRunningSessionIdsChange?: (ids: Set<string>) => void;
+  /** The polled subset parked on an extension's dialog, reported the same way. */
+  onAwaitingInputSessionIdsChange?: (ids: Set<string>) => void;
+  /** The rows' new-activity set (this browser's own markers), reported the same way. */
+  onUnreadSessionIdsChange?: (ids: Set<string>) => void;
   onSessionsChange?: (sessions: SessionInfo[]) => void;
   /**
    * Kanban (mock, UI design phase): the project board's marker — the icon a
@@ -501,7 +505,7 @@ function buttonAnchor(element: HTMLElement, align: "start" | "end"): SidebarMenu
   return { kind: "rect", rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }, align };
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, controlRef, onNewSessionContextChange, initialSessionId, initialSessionLinked, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange, kanban }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, controlRef, onNewSessionContextChange, initialSessionId, initialSessionLinked, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onAwaitingInputSessionIdsChange, onUnreadSessionIdsChange, onSessionsChange, kanban }: Props) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
@@ -962,6 +966,14 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   useEffect(() => {
     onRunningSessionIdsChange?.(runningSessionIds);
   }, [onRunningSessionIdsChange, runningSessionIds]);
+
+  useEffect(() => {
+    onAwaitingInputSessionIdsChange?.(awaitingInputSessionIds);
+  }, [onAwaitingInputSessionIdsChange, awaitingInputSessionIds]);
+
+  useEffect(() => {
+    onUnreadSessionIdsChange?.(unreadSessionIds);
+  }, [onUnreadSessionIdsChange, unreadSessionIds]);
 
   useEffect(() => {
     onSessionsChange?.(allSessions);

@@ -199,6 +199,24 @@ export function AppShell() {
       return ids;
     });
   }, []);
+  // The same poll's parked-on-a-dialog subset (a subset of the running set):
+  // the kanban card's activity indicator reads these here, no fetch of its own.
+  const [awaitingInputSessionIds, setAwaitingInputSessionIds] = useState<Set<string>>(() => new Set());
+  const handleAwaitingInputSessionIdsChange = useCallback((ids: Set<string>) => {
+    setAwaitingInputSessionIds((previous) => {
+      if (previous.size === ids.size && [...ids].every((id) => previous.has(id))) return previous;
+      return ids;
+    });
+  }, []);
+  // The rows' new-activity markers (same source, this browser's own): the
+  // card's activity indicator shows the blue dot on the same terms as the row.
+  const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => new Set());
+  const handleUnreadSessionIdsChange = useCallback((ids: Set<string>) => {
+    setUnreadSessionIds((previous) => {
+      if (previous.size === ids.size && [...ids].every((id) => previous.has(id))) return previous;
+      return ids;
+    });
+  }, []);
   // The temporary id distinguishes consecutive fresh composers in one cwd.
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null);
   const [newSessionDraftId, setNewSessionDraftId] = useState("initial");
@@ -1611,6 +1629,8 @@ export function AppShell() {
         onAtMentions={handleAtMentions}
         onBackgroundTaskDone={handleBackgroundTaskDone}
         onRunningSessionIdsChange={handleRunningSessionIdsChange}
+        onAwaitingInputSessionIdsChange={handleAwaitingInputSessionIdsChange}
+        onUnreadSessionIdsChange={handleUnreadSessionIdsChange}
         onSessionsChange={handleSessionsChange}
         kanban={{
           onOpenBoard: (projectRoot) => openKanbanBoardView(projectRoot),
@@ -2850,6 +2870,8 @@ export function AppShell() {
                   projectName={getFileName(boardProjectDir) || boardProjectDir}
                   sessions={boardSessions}
                   runningSessionIds={runningSessionIds}
+                  awaitingInputSessionIds={awaitingInputSessionIds}
+                  unreadSessionIds={unreadSessionIds}
                   highlightCardId={boardHighlightCardId}
                   onOpenSession={(sessionId) => {
                     const target = sessionsWithSelection.find((session) => session.id === sessionId);

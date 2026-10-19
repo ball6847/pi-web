@@ -16,6 +16,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { SpinnerIcon } from "./SidebarIcons";
 import { useKanbanCardDrag } from "@/hooks/useKanbanCardDrag";
 import { listenForStackedDialogEscape } from "@/lib/stacked-dialog";
 import type { SessionInfo } from "@/lib/types";
@@ -48,6 +49,14 @@ export interface KanbanBoardProps {
   /** The project's top-level pi sessions, for the link pickers and "Open session". */
   sessions: SessionInfo[];
   runningSessionIds: Set<string>;
+  /**
+   * The running sessions parked on an extension's dialog (a subset of
+   * runningSessionIds) and the rows' new-activity markers: the card's activity
+   * indicator shows the sidebar row's states, precedence (awaiting before
+   * running before new activity) and labels.
+   */
+  awaitingInputSessionIds: Set<string>;
+  unreadSessionIds: Set<string>;
   /** The card to scroll to and ring, set when the user jumped here from the chat strip. */
   highlightCardId?: string | null;
   onOpenSession(sessionId: string, title: string): void;
@@ -486,11 +495,14 @@ function SessionPicker({
 
 // -- card ----------------------------------------------------------------------
 
-function CardView({
+/** Exported for tests: the card and its linked-session activity indicator. */
+export function CardView({
   lane,
   card,
   isLastLane,
   running,
+  awaiting,
+  unread,
   sessionGone,
   highlighted,
   dragSource,
@@ -505,6 +517,10 @@ function CardView({
   card: KanbanCard;
   isLastLane: boolean;
   running: boolean;
+  /** The linked session is parked on an extension's dialog: beats `running`. */
+  awaiting: boolean;
+  /** New activity in the linked session this browser has not opened: last of the three. */
+  unread: boolean;
   sessionGone: boolean;
   highlighted: boolean;
   /** True while this card is being dragged: it dims in place and the ghost carries it. */
@@ -536,6 +552,18 @@ function CardView({
 
   const done = isLastLane;
   const linked = card.sessionId !== null;
+  // The chip's leading slot is the activity slot. The sidebar row's precedence
+  // (awaiting before running before new activity) and labels pick what holds it
+  // while the linked session is active; idle keeps the session glyph. The slot's
+  // width never changes, so a state flip shifts nothing and can never push past
+  // the card.
+  const activityLabel = awaiting
+    ? t("sidebar.agentAwaitingInput")
+    : running
+      ? t("sidebar.agentRunning")
+      : unread
+        ? t("sidebar.newActivity")
+        : undefined;
 
   return (
     <article
@@ -626,7 +654,28 @@ function CardView({
               opacity: sessionGone ? 0.6 : 1,
             }}
           >
-            <ChatIcon size={10} />
+            <span
+              title={activityLabel}
+              style={{ flexShrink: 0, width: 11, height: 11, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+            >
+              {awaiting ? (
+                <span
+                  role="img"
+                  aria-label={t("sidebar.agentAwaitingInput")}
+                  className="session-tree-awaiting"
+                />
+              ) : running ? (
+                <SpinnerIcon size={11} label={t("sidebar.agentRunning")} />
+              ) : unread ? (
+                <span
+                  role="img"
+                  aria-label={t("sidebar.newSessionActivity")}
+                  className="session-tree-unread"
+                />
+              ) : (
+                <ChatIcon size={10} />
+              )}
+            </span>
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{card.sessionTitle ?? "…"}</span>
           </button>
         ) : (
@@ -655,14 +704,6 @@ function CardView({
             <LinkIcon size={10} />
             <span>{t("kanban.cardUnlinked")}</span>
           </button>
-        )}
-        {running && (
-          <span
-            role="img"
-            aria-label={t("kanban.stripRunning")}
-            title={t("kanban.stripRunning")}
-            style={{ flexShrink: 0, width: 6, height: 6, borderRadius: 3, background: "var(--accent)" }}
-          />
         )}
       </div>
     </article>
@@ -858,6 +899,8 @@ function LaneColumn({
   isLast,
   sessions,
   runningIds,
+  awaitingIds,
+  unreadIds,
   sessionIds,
   highlightCardId,
   form,
@@ -879,6 +922,8 @@ function LaneColumn({
   isLast: boolean;
   sessions: SessionInfo[];
   runningIds: Set<string>;
+  awaitingIds: Set<string>;
+  unreadIds: Set<string>;
   sessionIds: Set<string>;
   highlightCardId: string | null;
   /** The single card form, when it is in this lane. */
@@ -1007,6 +1052,8 @@ function LaneColumn({
               card={card}
               isLastLane={isLast}
               running={card.sessionId !== null && runningIds.has(card.sessionId)}
+              awaiting={card.sessionId !== null && awaitingIds.has(card.sessionId)}
+              unread={card.sessionId !== null && unreadIds.has(card.sessionId)}
               sessionGone={sessionGone}
               highlighted={highlightCardId === card.id}
               dragSource={dragSourceCardId === card.id}
@@ -1333,7 +1380,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
 }
 
 function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; notice: React.ReactNode }) {
-  const { board, projectDir, projectName, sessions, runningSessionIds, highlightCardId, onOpenSession, onStartSession, notice } = props;
+  const { board, projectDir, projectName, sessions, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, highlightCardId, onOpenSession, onStartSession, notice } = props;
   const { t } = useI18n();
   const mobile = useIsMobile();
   const [configOpen, setConfigOpen] = useState(false);
@@ -1627,6 +1674,8 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
             isLast={laneIndex === board.lanes.length - 1}
             sessions={sessions}
             runningIds={runningSessionIds}
+            awaitingIds={awaitingInputSessionIds}
+            unreadIds={unreadSessionIds}
             sessionIds={sessionIds}
             highlightCardId={flashId ?? highlightCardId ?? null}
             form={formFor}
