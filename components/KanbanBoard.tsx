@@ -1717,14 +1717,23 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
   });
 
   const sessionIds = useMemo(() => new Set(sessions.map((s) => s.id)), [sessions]);
+  // The lane the phone shows must stay put: the arrival highlight is cleared
+  // 2.4 s after landing (AppShell's board highlight timer), and that clear must
+  // not drag the view back to the first lane that happens to hold cards.
+  const shownLaneRef = useRef<string | null>(null);
   const activeMobileLane = useMemo(() => {
     if (!mobile) return null;
     if (mobileLaneId && board.lanes.some((l) => l.id === mobileLaneId)) return mobileLaneId;
     // Arrival with a card (the strip's View board, the sidebar ring): open its lane.
     const jump = board.cards.find((c) => c.id === highlightCardId);
     if (jump && board.lanes.some((l) => l.id === jump.laneId)) return jump.laneId;
+    // Then keep whatever lane is already open: the highlight above is transient.
+    if (shownLaneRef.current && board.lanes.some((l) => l.id === shownLaneRef.current)) return shownLaneRef.current;
     return board.lanes.find((l) => cardsOfLane(board, l.id).length > 0)?.id ?? board.lanes[0]?.id ?? null;
   }, [mobile, mobileLaneId, board, highlightCardId]);
+  useEffect(() => {
+    if (activeMobileLane) shownLaneRef.current = activeMobileLane;
+  }, [activeMobileLane]);
   const sessionOptions = useMemo(
     () => sessions.map((s) => ({ id: s.id, title: s.name || s.firstMessage || s.id, running: runningSessionIds.has(s.id) })),
     [sessions, runningSessionIds],
