@@ -459,6 +459,19 @@ test("lane operations: add (client id, dup id refused), rename (backlog refused)
   assert.equal(backlogMove.status, 400);
   assert.equal(backlogMove.body.code, "refused");
 
+  // reorder-lane: the lane drag's final position; 0 is clamped past the backlog.
+  const reordered = await post({ cwd: f.project, action: "reorder-lane", laneId: "lane-ship", toIndex: 1 });
+  assert.equal(reordered.status, 200);
+  assert.deepEqual(reordered.body.board.lanes.map((l) => l.id), ["lane-backlog", "lane-ship", "lane-plan", "lane-todo", "lane-implement", "lane-deploy", "lane-done"]);
+
+  const reorderBacklog = await post({ cwd: f.project, action: "reorder-lane", laneId: "lane-backlog", toIndex: 2 });
+  assert.equal(reorderBacklog.status, 400);
+  assert.equal(reorderBacklog.body.code, "refused");
+
+  const badIndex = await post({ cwd: f.project, action: "reorder-lane", laneId: "lane-ship", toIndex: 1.5 });
+  assert.equal(badIndex.status, 400);
+  assert.equal(badIndex.body.code, "invalid-request");
+
   // A card in the lane being deleted is relocated to the backlog, unlinked.
   const carded = await post({ cwd: f.project, action: "add-card", laneId: "lane-ship", title: "Ships", description: "d" });
   assert.equal(carded.status, 200);

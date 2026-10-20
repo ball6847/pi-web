@@ -99,6 +99,7 @@ export type KanbanAction =
   | { action: "add-lane"; name: string; description?: string; laneId?: string }
   | { action: "rename-lane"; laneId: string; name: string }
   | { action: "move-lane"; laneId: string; direction: -1 | 1 }
+  | { action: "reorder-lane"; laneId: string; toIndex: number }
   | { action: "delete-lane"; laneId: string };
 
 export type KanbanActionName = KanbanAction["action"];
@@ -115,6 +116,7 @@ export const KANBAN_ACTION_NAMES: readonly KanbanActionName[] = [
   "add-lane",
   "rename-lane",
   "move-lane",
+  "reorder-lane",
   "delete-lane",
 ];
 

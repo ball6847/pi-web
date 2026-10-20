@@ -465,6 +465,15 @@ export function kanbanRenameLane(projectDir: string | null, laneId: string, name
 export function kanbanMoveLane(projectDir: string | null, laneId: string, direction: -1 | 1): void {
   mutate(projectDir, { action: "move-lane", laneId, direction });
 }
+/**
+ * The lane drag's reorder (the board's columns, the config dialog's rows): a
+ * work lane moves to its final position. 0 is the fixed backlog, so a 0
+ * asked for lands right after it; a too-far index clamps to the end. Null
+ * when the rules refuse it.
+ */
+export function kanbanReorderLane(projectDir: string | null, laneId: string, toIndex: number): KanbanBoard | null {
+  return mutate(projectDir, { action: "reorder-lane", laneId, toIndex });
+}
 export function kanbanDeleteLane(projectDir: string | null, laneId: string): void {
   mutate(projectDir, { action: "delete-lane", laneId });
 }

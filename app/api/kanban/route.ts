@@ -28,7 +28,8 @@ import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security"
 //      link-session { cardId, sessionId, sessionTitle } unlink-session { cardId }
 //      create-card-for-session { sessionId, sessionTitle, laneId|null, cardId? }
 //      add-lane { name, description?, laneId? }        rename-lane { laneId, name }
-//      move-lane { laneId, direction: -1|1 }           delete-lane { laneId }
+//      move-lane { laneId, direction: -1|1 }           reorder-lane { laneId, toIndex }
+//      delete-lane { laneId }
 //
 // Every answer that is not a board is a typed refusal `{ error, code }`, never
 // a stack: 400 invalid (the request, the folder, a rule of the board), 403 for
@@ -146,6 +147,12 @@ function readAction(body: Record<string, unknown>): KanbanAction {
     case "move-lane": {
       if (body.direction !== -1 && body.direction !== 1) throw new Invalid("direction must be -1 or 1");
       return { action: "move-lane", laneId: required(body, "laneId", MAX_ID), direction: body.direction };
+    }
+    case "reorder-lane": {
+      if (typeof body.toIndex !== "number" || !Number.isInteger(body.toIndex) || body.toIndex < 0) {
+        throw new Invalid("toIndex must be a non-negative integer");
+      }
+      return { action: "reorder-lane", laneId: required(body, "laneId", MAX_ID), toIndex: body.toIndex };
     }
     case "delete-lane":
       return { action: "delete-lane", laneId: required(body, "laneId", MAX_ID) };
