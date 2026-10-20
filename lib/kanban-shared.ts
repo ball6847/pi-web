@@ -200,6 +200,11 @@ export function moveCardToLane(
   const lane = laneById(board, laneId);
   if (!card || !lane) return null;
   if (card.laneId !== laneId && !canRestInLane(card, lane)) return null;
+  // Anchoring a card on itself means "where it already is": a no-op, NOT the
+  // lane's end (placeCard would look for the anchor among the other cards and
+  // miss it, sending the card last). A stale anchor from another tab reads the
+  // same way as a gone one: the lane's end.
+  if (beforeCardId === cardId) return board;
   const placed = placeCard(board.cards, { ...card, laneId, updatedAt: now }, laneId, beforeCardId);
   // Landing exactly where the card already was writes nothing.
   return sameLaneOrder(board.cards, placed) ? board : { ...board, cards: placed };
