@@ -996,10 +996,14 @@ export function AppShell() {
     router.replace(`?cwd=${encodeURIComponent(cwd)}`, { scroll: false });
   }, [activeCwd, changeFileWorkspace, invalidateWorkspaceRestore, isMobile, newSessionCwd, router, selectedSession]);
 
-  // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.)
+  // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.). Esc stops the
+  // run only while the chat is the screen on show: the board view covers a
+  // still mounted ChatWindow, whose abort handler would otherwise stop the
+  // session running behind the board.
   useGlobalKeyboardShortcuts({
     onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
     activeCwd,
+    escapeStopsAgent: centerView === "chat",
   });
 
   // Client-built transient SessionInfo (new session / fork) lacks the
