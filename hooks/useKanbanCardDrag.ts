@@ -138,14 +138,18 @@ export function useKanbanCardDrag(options: KanbanCardDragOptions): KanbanCardDra
 
     /**
      * The card a drop at `clientY` lands before: the first card of the lane
-     * whose vertical midpoint is below the pointer. Null = the lane's end
-     * (also for an empty lane). The lane's own card list scrolls, so this
-     * reads rects, not offsets.
+     * whose vertical midpoint is below the pointer, the card in flight
+     * excepted (it stays in the DOM, and anchoring a drop on itself would read
+     * as "send it to the lane's end"). Null = the lane's end (also for an
+     * empty lane). The lane's own card list scrolls, so this reads rects, not
+     * offsets.
      */
-    const insertionBefore = (laneEl: HTMLElement, clientY: number): string | null => {
+    const insertionBefore = (laneEl: HTMLElement, clientY: number, draggedCardId: string): string | null => {
       for (const el of Array.from(laneEl.querySelectorAll<HTMLElement>("[data-kanban-card]"))) {
+        const id = el.dataset.kanbanCard;
+        if (!id || id === draggedCardId) continue;
         const r = el.getBoundingClientRect();
-        if (clientY < r.top + r.height / 2) return el.dataset.kanbanCard ?? null;
+        if (clientY < r.top + r.height / 2) return id;
       }
       return null;
     };
@@ -158,7 +162,7 @@ export function useKanbanCardDrag(options: KanbanCardDragOptions): KanbanCardDra
         const r = el.getBoundingClientRect();
         if (drag.clientX >= r.left && drag.clientX <= r.right && drag.clientY >= r.top && drag.clientY <= r.bottom) {
           const laneId = laneOf(el);
-          return laneId ? { laneId, beforeCardId: insertionBefore(el, drag.clientY) } : null;
+          return laneId ? { laneId, beforeCardId: insertionBefore(el, drag.clientY, drag.cardId) } : null;
         }
       }
       return null;
