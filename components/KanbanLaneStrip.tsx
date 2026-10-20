@@ -80,7 +80,7 @@ export function KanbanLaneStrip({
         : t("kanban.stripNotTracked");
 
   const workLanes = board.lanes.filter((lane) => !lane.fixed);
-  // Newest first; the menu's own filter (CardMenu shows one past 6 entries) takes it from here.
+  // Newest first, uncapped.
   const unlinkedCards = sessionlessCardsByRecency(board);
   const menuEntries: MenuEntry[] = [];
   if (card) {

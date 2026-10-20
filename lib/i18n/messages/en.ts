@@ -1507,7 +1507,6 @@ export const enLocale: LocalePlugin = {
     "kanban.cardFormSave": "Save",
     "kanban.cardFormCancel": "Cancel",
     "kanban.menuLabel": "Card actions",
-    "kanban.menuFilter": "Filter",
     "kanban.menuOpenSession": "Open session",
     "kanban.menuSessionGone": "That session is no longer available",
     "kanban.menuStartSession": "Start session",

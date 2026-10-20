@@ -19,6 +19,8 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { SpinnerIcon } from "./SidebarIcons";
 import { useKanbanCardDrag } from "@/hooks/useKanbanCardDrag";
 import { useKanbanLaneDrag } from "@/hooks/useKanbanLaneDrag";
+import { isRealResize, readViewport, useFloatingPlacement, type ViewportSize } from "@/hooks/useFloatingPlacement";
+import { placeSidebarMenu } from "./SidebarMenu";
 import { listenForStackedDialogEscape } from "@/lib/stacked-dialog";
 import type { SessionInfo } from "@/lib/types";
 import {
@@ -173,6 +175,23 @@ function GhostButton({
 
 // -- menu --------------------------------------------------------------------
 
+/**
+ * Where focus goes when a card menu closes: the control that opened it while
+ * it is still on the page and laid out (a ⋯ button that shows only while its
+ * card is hovered is display: none by then), else the card the menu belongs
+ * to, so a phone's held-press menu hands focus back where it came from.
+ */
+export function focusReturnTarget(opener: HTMLElement | null, card: HTMLElement | null): HTMLElement | null {
+  const rendered = (element: HTMLElement | null) =>
+    element !== null && element.isConnected && element.getClientRects().length > 0 ? element : null;
+  return rendered(opener) ?? rendered(card) ?? opener ?? card;
+}
+
+/** Read once: a popup's first paint already knows whether this is a touch screen. */
+const coarsePointer = typeof window !== "undefined" && window.matchMedia
+  ? window.matchMedia("(pointer: coarse)").matches
+  : false;
+
 export interface MenuEntry {
   id: string;
   label: string;
@@ -190,17 +209,18 @@ export function CardMenu({
   onClose,
   ignoreOutsideUntil = 0,
 }: {
-  /** The card's ⋯ button, so the menu opens against it. */
+  /** The rect of the control the menu hangs off: the card's ⋯, the strip's, or the card itself after a held press. */
   anchor: DOMRect;
   entries: MenuEntry[];
   onClose: () => void;
   /** performance.now() until which an outside pointerdown must not close the menu: a long-press that opened it fires its synthetic mousedown a moment after the release. */
   ignoreOutsideUntil?: number;
 }) {
-  const [filter, setFilter] = useState("");
-  const { t } = useI18n();
   const surfaceRef = useRef<HTMLDivElement | null>(null);
+  // The control pressed (the ⋯) and where focus goes after the menu: a held
+  // press on a phone has no button of its own, the card keeps the focus.
   const openerRef = useRef<HTMLElement | null>(null);
+  const focusReturnRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -210,47 +230,71 @@ export function CardMenu({
     ignoreOutsideUntilRef.current = ignoreOutsideUntil;
   }, [ignoreOutsideUntil]);
 
-  // Keyboard entry: land on the filter (when shown) or the first item, so
-  // arrow keys and Enter work from the moment the menu opens.
+  // The keyboard's own resizes must not close the menu (lib/soft-keyboard.ts,
+  // hooks/useFloatingPlacement.ts): any field a menu body grows later raises
+  // one, and a menu that closed for it would vanish a frame after opening.
+  const floating = useFloatingPlacement(true);
+  const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
+
+  // Keyboard entry: land on the first item, so arrow keys and Enter work from
+  // the moment the menu opens. It waits for `placed`: the menu is invisible
+  // until it is positioned, and an invisible element takes no focus.
   useEffect(() => {
+    if (!placed) return;
     const surface = surfaceRef.current;
     if (!surface) return;
-    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const target =
-      surface.querySelector<HTMLElement>("input") ??
-      surface.querySelector<HTMLElement>("button[role='menuitem']:not(:disabled)");
-    target?.focus({ preventScroll: true });
+    surface.querySelector<HTMLElement>("button[role='menuitem']:not(:disabled)")?.focus({ preventScroll: true });
+  }, [placed]);
+
+  // Where focus goes back to: the control that opened the menu (its ⋯, or the
+  // card after a phone's held press), taken while it is still on the page.
+  useEffect(() => {
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    openerRef.current = active;
+    focusReturnRef.current = active?.closest<HTMLElement>("[data-kanban-card]") ?? null;
   }, []);
+
+  // Placed before the first paint, and re-placed on every keyboard resize, so
+  // the menu stays above a keyboard that opens while it is up.
+  useLayoutEffect(() => {
+    const surface = surfaceRef.current;
+    if (!surface) return;
+    const place = () => {
+      const box = floating.viewport();
+      const rect = surface.getBoundingClientRect();
+      const next = placeSidebarMenu(
+        { kind: "rect", rect: anchor, align: "start" },
+        { width: rect.width, height: rect.height },
+        { left: 0, top: 0, width: box.width, height: box.height },
+      );
+      setPlaced((current) => (current && current.left === next.left && current.top === next.top ? current : next));
+    };
+    place();
+    return floating.subscribePlacement(place);
+  }, [anchor, floating]);
+
+  /** Focus back into the card the menu came from, when the menu closed with it inside (or nowhere). */
+  const restoreFocus = () => {
+    setTimeout(() => {
+      const target = focusReturnTarget(openerRef.current, focusReturnRef.current);
+      if (!target) return;
+      const active = document.activeElement;
+      const stranded = active === document.body
+        || (active instanceof Element && surfaceRef.current !== null && surfaceRef.current.contains(active));
+      if (stranded) target.focus({ preventScroll: true });
+    }, 0);
+  };
 
   useEffect(() => {
     const close = () => onCloseRef.current();
-    const isTextEntry = (el: Element | null) =>
-      el !== null &&
-      (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || (el instanceof HTMLElement && el.isContentEditable));
     const onKeyDown = (event: KeyboardEvent) => {
       const surface = surfaceRef.current;
       if (!surface || event.isComposing || event.keyCode === 229) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        // A filter with text in it is cleared first; the next Escape closes.
-        const field = surface.querySelector<HTMLInputElement>("input");
-        if (field && field.value) {
-          setFilter("");
-          field.focus({ preventScroll: true });
-          return;
-        }
         close();
-        // setTimeout, not rAF: a hidden tab defers rAF indefinitely, and the
-        // commit is synchronous either way, so the timeout always sees the
-        // post-close state.
-        setTimeout(() => {
-          const opener = openerRef.current;
-          if (!opener || !opener.isConnected) return;
-          const active = document.activeElement;
-          const stranded = active === document.body || (active instanceof Element && surfaceRef.current !== null && surfaceRef.current.contains(active));
-          if (stranded) opener.focus({ preventScroll: true });
-        }, 0);
+        restoreFocus();
         return;
       }
       const target = event.target instanceof Element ? event.target : null;
@@ -260,18 +304,9 @@ export function CardMenu({
         // No focus trap: Tabbing away from the menu closes it and focus goes
         // back to the opener, on from there.
         close();
-        setTimeout(() => {
-          const opener = openerRef.current;
-          if (!opener || !opener.isConnected) return;
-          const active = document.activeElement;
-          const stranded = active === document.body || (active instanceof Element && surfaceRef.current !== null && surfaceRef.current.contains(active));
-          if (stranded) opener.focus({ preventScroll: true });
-        }, 0);
+        restoreFocus();
         return;
       }
-      // The filter field keeps its letters and caret keys; Up and Down go on to the items.
-      const leavesFilter = (event.key === "ArrowDown" || event.key === "ArrowUp") && isTextEntry(target);
-      if (isTextEntry(target) && !leavesFilter) return;
       if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End") {
         const list = [...surface.querySelectorAll<HTMLButtonElement>("button[role='menuitem']:not(:disabled)")];
         if (list.length === 0) return;
@@ -299,9 +334,7 @@ export function CardMenu({
     };
   }, []);
 
-  const visible = entries.filter((entry) => !filter || entry.label.toLowerCase().includes(filter.toLowerCase()));
-  const left = Math.min(Math.max(anchor.left, 8), Math.max(8, window.innerWidth - 232));
-  const top = anchor.bottom + 6 + visible.length * 30 + 34 > window.innerHeight ? Math.max(8, anchor.top - 6 - visible.length * 30 - 34) : anchor.bottom + 6;
+  const box = floating.viewport();
 
   return createPortal(
     <div
@@ -310,11 +343,13 @@ export function CardMenu({
       role="menu"
       style={{
         position: "fixed",
-        left,
-        top: Math.max(8, top),
+        // Hidden until placed, so the menu never paints at the page's corner first.
+        left: placed?.left ?? 0,
+        top: placed?.top ?? 0,
+        visibility: placed ? "visible" : "hidden",
         zIndex: 650,
         width: 224,
-        maxHeight: "min(70dvh, 460px)",
+        maxHeight: Math.max(120, Math.min(460, box.height * 0.7)),
         overflowY: "auto",
         background: "var(--bg-panel)",
         border: "1px solid var(--border)",
@@ -324,29 +359,7 @@ export function CardMenu({
         fontSize: 12,
       }}
     >
-      {visible.length > 6 && (
-        <input
-          autoFocus
-          value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-          placeholder="…"
-          aria-label={t("kanban.menuFilter")}
-          style={{
-            display: "block",
-            width: "100%",
-            boxSizing: "border-box",
-            marginBottom: 4,
-            padding: "5px 8px",
-            fontSize: 12,
-            color: "var(--text)",
-            background: "var(--bg)",
-            border: "1px solid var(--border)",
-            borderRadius: 6,
-            outline: "none",
-          }}
-        />
-      )}
-      {visible.map((entry) => {
+      {entries.map((entry) => {
         const dim = entry.dim || (entry.disabled && !entry.danger);
         return (
           <button
@@ -386,9 +399,6 @@ export function CardMenu({
           </button>
         );
       })}
-      {visible.length === 0 && (
-        <div style={{ padding: "6px 8px", color: "var(--text-dim)", fontSize: 11 }}>{filter ? "—" : ""}</div>
-      )}
     </div>,
     document.body,
   );
@@ -417,6 +427,7 @@ function SessionPicker({
 }) {
   const [filter, setFilter] = useState("");
   const { t } = useI18n();
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
   const onCloseRef = useRef(onClose);
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -441,19 +452,41 @@ function SessionPicker({
     };
   }, []);
 
+  // The picker's filter raises the same keyboard the card menu survives: it
+  // re-places itself instead of closing for the keyboard's resizes.
+  const floating = useFloatingPlacement(true);
+  const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
+  useLayoutEffect(() => {
+    const surface = surfaceRef.current;
+    if (!surface) return;
+    const place = () => {
+      const box = floating.viewport();
+      const rect = surface.getBoundingClientRect();
+      const next = placeSidebarMenu(
+        { kind: "rect", rect: anchor, align: "start" },
+        { width: rect.width, height: rect.height },
+        { left: 0, top: 0, width: box.width, height: box.height },
+      );
+      setPlaced((current) => (current && current.left === next.left && current.top === next.top ? current : next));
+    };
+    place();
+    return floating.subscribePlacement(place);
+  }, [anchor, floating]);
+
   const visible = options.filter((option) => !filter || option.title.toLowerCase().includes(filter.toLowerCase()));
-  const left = Math.min(Math.max(anchor.left, 8), Math.max(8, window.innerWidth - 288));
-  const top = anchor.bottom + 6 + 232 > window.innerHeight ? Math.max(8, anchor.top - 6 - 232) : anchor.bottom + 6;
+  const box = floating.viewport();
 
   return createPortal(
     <div
+      ref={surfaceRef}
       data-kanban-picker
       role="listbox"
       aria-label={placeholder}
       style={{
         position: "fixed",
-        left,
-        top,
+        left: placed?.left ?? 0,
+        top: placed?.top ?? 0,
+        visibility: placed ? "visible" : "hidden",
         zIndex: 660,
         width: 280,
         background: "var(--bg-panel)",
@@ -464,17 +497,20 @@ function SessionPicker({
       }}
     >
       <input
-        autoFocus
+        // Tap to filter on a phone: focusing it raises the keyboard over the picker.
+        autoFocus={!coarsePointer}
         value={filter}
         onChange={(event) => setFilter(event.target.value)}
         placeholder={placeholder}
+        aria-label={placeholder}
         style={{
           display: "block",
           width: "100%",
           boxSizing: "border-box",
           marginBottom: 6,
           padding: "5px 8px",
-          fontSize: 12,
+          // 16px on touch: a smaller field makes iOS auto-zoom the page when it takes focus.
+          fontSize: coarsePointer ? 16 : 12,
           color: "var(--text)",
           background: "var(--bg)",
           border: "1px solid var(--border)",
@@ -482,7 +518,8 @@ function SessionPicker({
           outline: "none",
         }}
       />
-      <div style={{ maxHeight: 220, overflowY: "auto" }}>
+      {/* The rows scroll inside what the keyboard leaves of the viewport. */}
+      <div style={{ maxHeight: Math.max(96, Math.min(220, box.height * 0.5)), overflowY: "auto" }}>
         {visible.map((option) => (
           <button
             key={option.id}
@@ -1742,14 +1779,31 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
   const menuCard = menuFor ? board.cards.find((c) => c.id === menuFor.cardId) ?? null : null;
   const linkCard = linkFor ? board.cards.find((c) => c.id === linkFor.cardId) ?? null : null;
 
+  /**
+   * A real resize (a phone turning, a window dragged) leaves the open menu's
+   * and picker's anchor rectangles pointing at nothing, so both close. The
+   * soft keyboard's own resizes must not count — the picker's filter field
+   * raises one, and closing on its animation is the popup opening and
+   * vanishing at once
+   * (lib/soft-keyboard.ts). The popups re-place themselves for those.
+   */
+  const viewportSizeRef = useRef<ViewportSize | null>(null);
   useEffect(() => {
-    if (!menuFor && !linkFor) return;
-    const close = () => {
+    if (!menuFor && !linkFor) {
+      viewportSizeRef.current = null;
+      return;
+    }
+    viewportSizeRef.current ??= readViewport();
+    const onResize = () => {
+      const next = readViewport();
+      const previous = viewportSizeRef.current;
+      viewportSizeRef.current = next;
+      if (previous && !isRealResize(previous, next)) return;
       setMenuFor(null);
       setLinkFor(null);
     };
-    window.addEventListener("resize", close);
-    return () => window.removeEventListener("resize", close);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, [menuFor, linkFor]);
 
   const openMenu = useCallback((anchor: DOMRect, card: KanbanCard) => {
