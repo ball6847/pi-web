@@ -8,11 +8,11 @@ import lockfile from "proper-lockfile";
 
 const jiti = createJiti(import.meta.url, { alias: { "@": process.cwd() }, interopDefault: true, moduleCache: false });
 const route = await jiti.import("./route.ts");
-const store = await jiti.import("../../../lib/kanban-store.ts");
+const data = await jiti.import("../../../lib/kanban-data.ts");
 const { allowFileRoot } = await jiti.import("../../../lib/file-access.ts");
+const { DatabaseSync } = await import("node:sqlite");
 
 function resetGlobalState() {
-  store.resetKanbanStateForTests();
   globalThis.__piSessionListCache = undefined;
   globalThis.__piSessionListPromise = undefined;
   globalThis.__piSessionListPromiseGeneration = undefined;
@@ -44,17 +44,41 @@ function fixture(t, { allow = true } = {}) {
     fs.rmSync(root, { recursive: true, force: true });
   });
   const key = `--${project.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
-  const path = join(agentDir, "kanban", key, "kanban.json");
+  const path = join(agentDir, "kanban", key, "kanban.sqlite");
   return {
     root,
     agentDir,
     project,
     path,
-    file: () => JSON.parse(fs.readFileSync(path, "utf8")),
-    bytes: () => fs.readFileSync(path, "utf8"),
+    /** The board the file holds, read straight from the database. */
+    board: () => withDb(path, (db) => data.readBoardRows(db, project).board),
+    revision: () => withDb(path, (db) => data.readBoardRevision(db)),
+    schema: () => withDb(path, (db) => Number(db.prepare("PRAGMA user_version").get().user_version ?? 0)),
+    /** Every row and the meta table as one string: what a no-write path leaves untouched. */
+    rows: () => withDb(path, (db) => JSON.stringify({
+      lanes: db.prepare("SELECT * FROM lanes ORDER BY position").all(),
+      cards: db.prepare("SELECT * FROM cards ORDER BY position").all(),
+      meta: db.prepare("SELECT * FROM meta ORDER BY key").all(),
+    })),
     exists: () => fs.existsSync(path),
     stat: () => fs.statSync(path),
+    files: () => (fs.existsSync(dirname(path)) ? fs.readdirSync(dirname(path)) : []),
   };
+}
+
+/** The file's bytes (a file that is not a database has no rows to compare). */
+function bytesOf(path) {
+  return fs.readFileSync(path, "latin1");
+}
+
+/** Opens a board file for reading and closes it again (never creates one). */
+function withDb(path, body) {
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    return body(db);
+  } finally {
+    db.close();
+  }
 }
 
 /** A fabricated `<agentDir>/sessions/<encoded-cwd>/<timestamp>_<id>.jsonl` with just a header. */
@@ -98,13 +122,14 @@ test("a GET auto-creates the board on first read and answers the second read wit
   assert.equal(first.body.board.lanes.length, 6);
   assert.deepEqual(first.body.board.cards, []);
   assert.ok(f.exists());
-  assert.equal(f.file().schemaVersion, 1);
+  assert.equal(f.schema(), 1, "the file carries the board schema stamp");
+  assert.deepEqual(f.files(), ["kanban.sqlite"], "the board is one self-contained file");
 
-  const bytes = f.bytes();
+  const rows = f.rows();
   const second = await get(f.project);
   assert.equal(second.status, 200);
   assert.equal(second.body.revision, first.body.revision);
-  assert.equal(f.bytes(), bytes);
+  assert.equal(f.rows(), rows, "the second read rewrote no row");
 });
 
 test("a GET with create=0 reads a missing board as empty, writes nothing, and skips the request gate", async (t) => {
@@ -211,7 +236,7 @@ test("a POST link-session for a session that does not exist in the project is a 
   const missing = await post({ cwd: f.project, action: "link-session", cardId: "c1", sessionId: "ghost", sessionTitle: "Ghost" });
   assert.equal(missing.status, 404);
   assert.equal(missing.body.code, "session-missing");
-  const card = f.file().board.cards.find((c) => c.id === "c1");
+  const card = f.board().cards.find((c) => c.id === "c1");
   assert.equal(card.sessionId, null);
 
   fabricateSession(f.agentDir, f.project, "real-1");
@@ -223,12 +248,12 @@ test("a POST link-session for a session that does not exist in the project is a 
 test("a POST add-card with a session into the fixed backlog is a 400 refused and writes nothing", async (t) => {
   const f = fixture(t);
   await post({ cwd: f.project, action: "add-card", laneId: "lane-todo", title: "Existing" }); // materialize the board
-  const before = f.file();
+  const before = f.rows();
   fabricateSession(f.agentDir, f.project, "real-1");
   const refused = await post({ cwd: f.project, action: "add-card", laneId: "lane-backlog", title: "Tracked", sessionId: "real-1", sessionTitle: "Real" });
   assert.equal(refused.status, 400);
   assert.equal(refused.body.code, "refused");
-  assert.equal(JSON.stringify(f.file()), JSON.stringify(before), "the refusal writes nothing");
+  assert.equal(f.rows(), before, "the refusal writes nothing");
 });
 
 test("a POST mutation round-trips to the file and bumps the revision", async (t) => {
@@ -237,7 +262,7 @@ test("a POST mutation round-trips to the file and bumps the revision", async (t)
   const added = await post({ cwd: f.project, action: "add-card", laneId: "lane-todo", title: " First ", description: "d", cardId: "c1" });
   assert.equal(added.status, 200);
   assert.ok(added.body.revision > base.body.revision);
-  assert.deepEqual(f.file().board.cards.map((c) => [c.id, c.title, c.laneId]), [["c1", "First", "lane-todo"]]);
+  assert.deepEqual(f.board().cards.map((c) => [c.id, c.title, c.laneId]), [["c1", "First", "lane-todo"]]);
 
   // A sessionless card may rest in a work lane only because it was added there; moving
   // it to another work lane is refused. Linking a session unblocks the move.
@@ -250,15 +275,15 @@ test("a POST mutation round-trips to the file and bumps the revision", async (t)
   const moved = await post({ cwd: f.project, action: "move-card", cardId: "c1", laneId: "lane-plan" });
   assert.equal(moved.status, 200);
   assert.ok(moved.body.revision > added.body.revision);
-  assert.equal(f.file().board.cards[0].laneId, "lane-plan");
+  assert.equal(f.board().cards[0].laneId, "lane-plan");
 
   // A sessionless card leaving the backlog for a work lane is refused too, and writes nothing.
   await post({ cwd: f.project, action: "add-card", laneId: "lane-backlog", title: "Stuck", cardId: "c2" });
   const refusedBacklog = await post({ cwd: f.project, action: "move-card", cardId: "c2", laneId: "lane-todo" });
   assert.equal(refusedBacklog.status, 400);
   assert.equal(refusedBacklog.body.code, "refused");
-  assert.equal(f.file().board.cards.length, 2);
-  assert.equal(f.file().board.cards.find((c) => c.id === "c2").laneId, "lane-backlog");
+  assert.equal(f.board().cards.length, 2);
+  assert.equal(f.board().cards.find((c) => c.id === "c2").laneId, "lane-backlog");
 });
 
 test("a POST while another process holds the lock is a 423 locked and leaves the file alone", { timeout: 30_000 }, async (t) => {
@@ -266,12 +291,12 @@ test("a POST while another process holds the lock is a 423 locked and leaves the
   const f = fixture(t);
   await get(f.project);
   const release = await lockfile.lock(f.path, { realpath: false, stale: 60_000 });
-  const bytes = f.bytes();
+  const bytes = f.rows();
   try {
     const blocked = await post({ cwd: f.project, action: "add-card", laneId: "lane-todo", title: "Blocked" });
     assert.equal(blocked.status, 423);
     assert.equal(blocked.body.code, "locked");
-    assert.equal(f.bytes(), bytes);
+    assert.equal(f.rows(), bytes);
   } finally {
     await release();
   }
@@ -282,20 +307,21 @@ test("a POST while another process holds the lock is a 423 locked and leaves the
 test("a POST on a board from a newer schema is a 500 unsupported-schema and leaves the file untouched", async (t) => {
   const f = fixture(t);
   await get(f.project);
-  const current = f.file();
-  const newer = JSON.stringify({ ...current, schemaVersion: 2 });
-  fs.writeFileSync(f.path, newer);
+  const stamp = new DatabaseSync(f.path);
+  stamp.exec("PRAGMA user_version = 2");
+  stamp.close();
+  const newer = f.rows();
 
   const denied = await post({ cwd: f.project, action: "add-card", laneId: "lane-todo", title: "X" });
   assert.equal(denied.status, 500);
   assert.equal(denied.body.code, "unsupported-schema");
-  assert.equal(f.bytes(), newer, "the file is left as found");
+  assert.equal(f.rows(), newer, "the file is left as found");
 
   // The creating read refuses it the same way.
   const read = await get(f.project);
   assert.equal(read.status, 500);
   assert.equal(read.body.code, "unsupported-schema");
-  assert.equal(f.bytes(), newer);
+  assert.equal(f.rows(), newer);
 });
 
 /** Writes garbage where the board would live, so the next read sees it as corrupt. */
@@ -311,27 +337,29 @@ function corruptBackups(f) {
 test("a create=0 GET on a corrupt file reads it as an empty board and leaves it exactly as found", async (t) => {
   const f = fixture(t);
   corruptBoard(f);
-  const bytes = f.bytes();
+  const bytes = bytesOf(f.path);
 
   const read = await get(f.project, "&create=0");
   assert.equal(read.status, 200);
   assert.equal(read.body.revision, 0);
   assert.equal(read.body.board.lanes.length, 6);
   assert.equal(read.body.board.cards.length, 0);
-  assert.equal(f.bytes(), bytes, "a no-write read never sets the file aside");
+  assert.equal(bytesOf(f.path), bytes, "a no-write read never sets the file aside");
   assert.deepEqual(corruptBackups(f), []);
 });
 
 test("a revOnly=1 GET on a corrupt file is still a pure stat: the file's mtime, no parse, no backup", async (t) => {
   const f = fixture(t);
   corruptBoard(f);
-  const bytes = f.bytes();
+  const bytes = bytesOf(f.path);
   const mtime = fs.statSync(f.path).mtimeMs;
 
+  // A corrupt file has no board to report: revision 0, no write, no backup.
   const read = await get(f.project, "&revOnly=1");
   assert.equal(read.status, 200);
-  assert.deepEqual(read.body, { revision: mtime });
-  assert.equal(f.bytes(), bytes);
+  assert.deepEqual(read.body, { revision: 0 });
+  assert.equal(bytesOf(f.path), bytes);
+  assert.equal(fs.statSync(f.path).mtimeMs, mtime, "a stat never touches the file");
   assert.deepEqual(corruptBackups(f), []);
 });
 
@@ -345,7 +373,7 @@ test("a creating GET on a corrupt file sets it aside and answers a fresh board",
   assert.equal(read.body.board.lanes.length, 6);
   assert.equal(read.body.board.cards.length, 0);
   assert.equal(corruptBackups(f).length, 1, "exactly one backup sibling");
-  assert.equal(f.file().schemaVersion, 1, "the new file is a valid board");
+  assert.equal(f.schema(), 1, "the new file is a valid board");
 });
 
 test("a POST on a corrupt file sets it aside, applies the action to a fresh board, and has no corrupt flag of its own", async (t) => {
@@ -359,7 +387,7 @@ test("a POST on a corrupt file sets it aside, applies the action to a fresh boar
   assert.equal(added.body.board.cards[0].title, "After the mess");
   assert.deepEqual(Object.keys(added.body).sort(), ["board", "revision"], "the response shape never gained a flag");
   assert.equal(corruptBackups(f).length, 1);
-  assert.equal(f.file().board.cards.length, 1);
+  assert.equal(f.board().cards.length, 1);
 });
 
 test("a POST whose cwd is an existing regular file is a 400 cwd-not-directory", async (t) => {
@@ -390,7 +418,7 @@ test("a move-card with a session jumps to any work lane but never into the backl
   const toBacklog = await post({ cwd: f.project, action: "move-card", cardId: card.id, laneId: "lane-backlog" });
   assert.equal(toBacklog.status, 400);
   assert.equal(toBacklog.body.code, "refused");
-  assert.equal(jumped.body.board.cards.find((c) => c.id === card.id).laneId, f.file().board.cards.find((c) => c.id === card.id).laneId);
+  assert.equal(jumped.body.board.cards.find((c) => c.id === card.id).laneId, f.board().cards.find((c) => c.id === card.id).laneId);
 });
 
 test("move-card's beforeCardId drops the card anywhere in the target lane, and a no-op move writes nothing", async (t) => {
@@ -403,7 +431,7 @@ test("move-card's beforeCardId drops the card anywhere in the target lane, and a
   const one = first.body.board.cards.find((c) => c.sessionId === "ord-1").id;
   const second = await post({ cwd: f.project, action: "create-card-for-session", sessionId: "ord-2", sessionTitle: "Second", laneId: "lane-todo" });
   const two = second.body.board.cards.find((c) => c.sessionId === "ord-2").id;
-  const laneOrder = () => f.file().board.cards.filter((c) => c.laneId === "lane-todo").map((c) => c.id);
+  const laneOrder = () => f.board().cards.filter((c) => c.laneId === "lane-todo").map((c) => c.id);
   assert.deepEqual(laneOrder(), [one, two], "new cards go last");
 
   // Reorder inside the lane: the second card before the first.
@@ -421,14 +449,14 @@ test("move-card's beforeCardId drops the card anywhere in the target lane, and a
   const moved = await post({ cwd: f.project, action: "move-card", cardId: one, laneId: "lane-plan", beforeCardId: null });
   assert.equal(moved.status, 200);
   await post({ cwd: f.project, action: "move-card", cardId: two, laneId: "lane-plan", beforeCardId: one });
-  assert.deepEqual(f.file().board.cards.filter((c) => c.laneId === "lane-plan").map((c) => c.id), [two, one]);
+  assert.deepEqual(f.board().cards.filter((c) => c.laneId === "lane-plan").map((c) => c.id), [two, one]);
 
   // Shape checks: a beforeCardId that is not a string is refused before anything is written.
-  const before = JSON.stringify(f.file());
+  const before = f.rows();
   const bad = await post({ cwd: f.project, action: "move-card", cardId: two, laneId: "lane-plan", beforeCardId: 7 });
   assert.equal(bad.status, 400);
   assert.equal(bad.body.code, "invalid-request");
-  assert.equal(JSON.stringify(f.file()), before);
+  assert.equal(f.rows(), before);
 });
 
 test("create-card-for-session is idempotent per session, and unlink keeps the snapshot title", async (t) => {
@@ -545,14 +573,14 @@ test("edit-card: title and description update, neither is an invalid request, an
 test("a revOnly=1 GET passes an untrusted host: a pure stat, like create=0, and never writes", async (t) => {
   const f = fixture(t);
   await get(f.project);
-  const bytesBefore = f.bytes();
+  const bytesBefore = f.rows();
   const trusted = await get(f.project, "&revOnly=1");
   assert.equal(trusted.status, 200);
 
   const untrusted = await get(f.project, "&revOnly=1", UNTRUSTED);
   assert.equal(untrusted.status, 200);
   assert.equal(untrusted.body.revision, trusted.body.revision);
-  assert.equal(f.bytes(), bytesBefore, "a stat never rewrites");
+  assert.equal(f.rows(), bytesBefore, "a stat never rewrites");
 
   const bare = fixture(t);
   const none = await get(bare.project, "&revOnly=1", UNTRUSTED);
@@ -579,10 +607,10 @@ test("a read unlinks a card whose session file vanished: keeps lane and snapshot
   assert.equal(card.sessionTitle, "Dead one", "the snapshot survives");
   assert.equal(card.laneId, "lane-todo", "the lane survives");
 
-  const bytes = f.bytes();
+  const bytes = f.rows();
   const again = await get(f.project);
   assert.equal(again.status, 200);
-  assert.equal(f.bytes(), bytes, "a read with nothing dead writes nothing");
+  assert.equal(f.rows(), bytes, "a read with nothing dead writes nothing");
 });
 
 test("a mutation prunes dead links inside its own lock: the answered board is already clean", async (t) => {
@@ -606,16 +634,17 @@ test("a mutation prunes dead links inside its own lock: the answered board is al
   const prunedCard = advanced.body.board.cards.find((c) => c.id === card2.id);
   assert.equal(prunedCard.sessionId, null, "the dead link is gone from the answered board");
   assert.equal(prunedCard.sessionTitle, "Going");
-  assert.equal(f.file().board.cards.find((c) => c.id === card2.id).sessionId, null);
+  assert.equal(f.board().cards.find((c) => c.id === card2.id).sessionId, null);
 });
 
-test("a fresh board's bytes are exactly the canonical envelope: 2-space JSON, trailing newline, committable", async (t) => {
+test("a fresh board's rows are exactly the answered board, one self-contained file, committable", async (t) => {
   const f = fixture(t);
   const res = await get(f.project);
   assert.equal(res.status, 200);
-  const expected = JSON.stringify({ schemaVersion: 1, board: res.body.board }, null, 2) + "\n";
-  assert.equal(f.bytes(), expected, "the written file is the envelope re-serialized canonically");
-  assert.ok(!f.bytes().includes("undefined"));
+  assert.deepEqual(f.board(), res.body.board, "what the answer says is what the rows hold");
+  assert.deepEqual(f.files(), ["kanban.sqlite"], "no journal or sidecar is left beside it");
+  assert.equal(f.schema(), 1);
+  assert.equal(f.revision(), res.body.revision);
   assert.equal(f.stat().mode & 0o777, 0o644);
 });
 
@@ -626,13 +655,13 @@ test("an edit that changes nothing writes nothing and leaves the revision standi
   assert.equal(added.status, 200);
   const rev = added.body.revision;
   assert.ok(rev > 0);
-  const bytes = f.bytes();
+  const bytes = f.rows();
   const cardId = added.body.board.cards[0].id;
 
   const noop = await post({ cwd: f.project, action: "edit-card", cardId, title: "Same" });
   assert.equal(noop.status, 200);
   assert.equal(noop.body.revision, rev, "the reducer's same-object result skips the write, so no bump");
-  assert.equal(f.bytes(), bytes, "the file is untouched");
+  assert.equal(f.rows(), bytes, "the file is untouched");
 
   const real = await post({ cwd: f.project, action: "edit-card", cardId, title: "Changed" });
   assert.equal(real.status, 200);
@@ -646,7 +675,7 @@ test("a refused mutation on a bare project still materializes the fresh board", 
   assert.equal(res.status, 400);
   assert.equal(res.body.code, "refused");
   assert.ok(f.exists(), "the edit writes the fresh board even though the action was refused");
-  assert.equal(f.file().board.cards.length, 0);
+  assert.equal(f.board().cards.length, 0);
   const rev = await get(f.project, "&revOnly=1");
   assert.equal(rev.status, 200);
   assert.ok(rev.body.revision > 0, "the write left a revision behind");
