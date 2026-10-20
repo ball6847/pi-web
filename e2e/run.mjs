@@ -18,6 +18,7 @@ import { checkModelContext } from "./model-context.mjs";
 import { checkFilesPlacement, showSidebarSessions } from "./sidebar.mjs";
 import { checkSessionNavigation } from "./session-navigation.mjs";
 import { checkProjectNavigation, createProjectNavigationFixtures } from "./project-navigation.mjs";
+import { checkKanbanCardMenuOnPhone } from "./kanban-menu.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const mode = process.env.E2E_SERVER_MODE || "dev";
@@ -527,6 +528,8 @@ try {
     },
   });
   await checkProjectNavigation({ browser, base, artifacts, fixture: projectNavigation, otherSessionId: BRANCH, api, post });
+  // The card menu on a phone: the soft keyboard's resize must not close it.
+  await checkKanbanCardMenuOnPhone({ browser, base, project, sessionId: BRANCH, post, artifacts });
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
