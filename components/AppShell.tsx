@@ -55,7 +55,7 @@ import {
   showBrowserNotification,
 } from "@/lib/browser-notifications";
 import { setupPushSubscription } from "@/lib/push-client";
-import { getInitialNavigation, linkedSessionId, withTabOpen } from "@/lib/initial-navigation";
+import { boardViewUrl, getInitialNavigation, linkedSessionId, withTabOpen, withoutBoardView } from "@/lib/initial-navigation";
 import { clearTabOpenSession, getTabOpen, setTabOpenNewSession, setTabOpenSession } from "@/lib/tab-session";
 import { mergeCatalogRow } from "./session-catalog-helpers";
 import { getDraft, rekeyDraft, setDraft } from "@/lib/draft-store";
@@ -269,9 +269,15 @@ export function AppShell() {
   const [projectTrustError, setProjectTrustError] = useState<ProjectTrustFailure | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(() => !initialNavigation.sidebarCollapsed);
   // Kanban board: the main-area view the center content switches to, the
-  // chat's top strip, and the fresh composer's choice.
-  const [centerView, setCenterView] = useState<"chat" | "board">("chat");
-  const [boardProjectDir, setBoardProjectDir] = useState<string | null>(null);
+  // chat's top strip, and the fresh composer's choice. A board is a screen the
+  // user parks in (`?board=<projectDir>`, read back by getInitialNavigation),
+  // so a reload stays on it instead of falling back to the chat.
+  const [centerView, setCenterView] = useState<"chat" | "board">(
+    () => getInitialNavigation(searchParams).boardProjectDir ? "board" : "chat",
+  );
+  const [boardProjectDir, setBoardProjectDir] = useState<string | null>(
+    () => getInitialNavigation(searchParams).boardProjectDir,
+  );
   const [boardHighlightCardId, setBoardHighlightCardId] = useState<string | null>(null);
   const boardHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [newSessionKanbanPending, setNewSessionKanbanPending] = useState<KanbanNewSessionPending>(KANBAN_OFF_PENDING);
@@ -890,8 +896,11 @@ export function AppShell() {
   }, [activeCwd, changeFileWorkspace, invalidateWorkspaceRestore, newSessionCwd, router, selectedSession, restoreWorkspaceContext]);
 
   const handleSelectSession = useCallback((session: SessionInfo, isRestore = false, entryId?: string, blockIndex?: number, options?: SelectSessionOptions) => {
-    // Picking a session means the user wants its chat, not whatever the center shows.
-    setCenterView("chat");
+    // Picking a session means the user wants its chat, not whatever the center
+    // shows. A restore is not a pick: the sidebar replaying the URL's (or this
+    // tab's) session on mount must leave a `?board=` view up, or a reload of the
+    // board would land back on the chat.
+    if (!isRestore) setCenterView("chat");
     setSearchTarget(entryId ? { sessionId: session.id, entryId, blockIndex } : null);
     invalidateWorkspaceRestore();
     const activeDraftKey = activeNewSessionDraftKeyRef.current;
@@ -1410,6 +1419,25 @@ export function AppShell() {
   const contextBoard = useKanbanBoard(kanbanContextDir);
   const viewBoard = useKanbanBoard(centerView === "board" ? boardProjectDir : null);
   const boardTabAvailable = showChat && (kanbanContextDir !== null || centerView === "board");
+  // The board view lives in the URL (`?board=<projectDir>`) so a reload comes
+  // back to it. history.replaceState, not router.replace: this URL is only
+  // read by mount, and a Next replace remounts the tree through Suspense (the
+  // caution handleSelectSession keeps). The query every other writer builds
+  // stays intact, so the chat context under the board is untouched.
+  //
+  // `searchParams` is a dependency because those other writers rebuild the query
+  // from scratch (a session restore writes `?session=`, the composer's cwd move
+  // writes the bare path) and would drop the board: re-running here puts it
+  // back. Next does not read this write back, so it cannot loop.
+  useEffect(() => {
+    const query = centerView === "board" && boardProjectDir
+      ? boardViewUrl(window.location.search, boardProjectDir)
+      : withoutBoardView(window.location.search);
+    const next = `${window.location.pathname}${query}${window.location.hash}`;
+    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(window.history.state, "", next);
+    }
+  }, [boardProjectDir, centerView, searchParams]);
   const openKanbanBoardView = useCallback((projectDir: string | null, cardId: string | null = null) => {
     if (projectDir) setBoardProjectDir(projectDir);
     setCenterView("board");

@@ -5,6 +5,12 @@ export interface InitialNavigation {
   sessionId: string | null;
   /** `sessionId` is this tab's memory (`withTabOpen`), not the URL's `?session=`. */
   sessionFromTab?: boolean;
+  /**
+   * `?board=<projectDir>`: the board view is the center screen, not the chat.
+   * The chat context (session or cwd) stays in the URL beside it, so returning
+   * to the chat, and the page under the board, are the same as before.
+   */
+  boardProjectDir: string | null;
   sidebarCollapsed: boolean;
 }
 
@@ -16,8 +22,30 @@ export function getInitialNavigation(
   return {
     requestedCwd,
     sessionId: requestedCwd ? null : (searchParams.get("session") || null),
+    boardProjectDir: searchParams.get("board")?.trim() || null,
     sidebarCollapsed: searchParams.get("sidebar") === "collapsed",
   };
+}
+
+/**
+ * The query of a board view: `?board=<projectDir>`, beside whatever the URL
+ * already carries (`?session=`, `?cwd=`, the sidebar state). The caller pairs
+ * it with `window.location.pathname` and writes it with `history.replaceState`,
+ * so the reload it survives costs no server render (AppShell's `router.replace`
+ * caution applies: a Next replace here remounts through Suspense).
+ */
+export function boardViewUrl(search: string, projectDir: string): string {
+  const params = new URLSearchParams(search);
+  params.set("board", projectDir);
+  return `?${params.toString()}`;
+}
+
+/** The same query without the board view: every other parameter stays (`""` when none is left). */
+export function withoutBoardView(search: string): string {
+  const params = new URLSearchParams(search);
+  params.delete("board");
+  const query = params.toString();
+  return query ? `?${query}` : "";
 }
 
 /**
