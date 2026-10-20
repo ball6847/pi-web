@@ -46,6 +46,13 @@ interface UseGlobalKeyboardShortcutsOptions {
   onNewSession?: (cwd: string) => void;
   /** The currently selected project directory (sidebar cwd). */
   activeCwd?: string | null;
+  /**
+   * Whether Esc may stop the running agent. False while another screen covers
+   * the chat (the kanban board): the chat stays mounted under `display: none`,
+   * so its registered abort handler would otherwise stop a run the user cannot
+   * see and swallow the key the covering screen wants. Defaults to true.
+   */
+  escapeStopsAgent?: boolean;
 }
 
 /**
@@ -64,13 +71,13 @@ interface UseGlobalKeyboardShortcutsOptions {
 export function useGlobalKeyboardShortcuts(
   options: UseGlobalKeyboardShortcutsOptions,
 ): void {
-  const { onNewSession, activeCwd } = options;
+  const { onNewSession, activeCwd, escapeStopsAgent = true } = options;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
-      // ---- Esc: stop agent ----
+      // ---- Esc: stop agent, only while the chat is the screen on show ----
       if (e.key === "Escape") {
-        handleGlobalEscape(e);
+        if (escapeStopsAgent) handleGlobalEscape(e);
         return;
       }
 
@@ -84,5 +91,5 @@ export function useGlobalKeyboardShortcuts(
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeCwd, onNewSession]);
+  }, [activeCwd, escapeStopsAgent, onNewSession]);
 }
