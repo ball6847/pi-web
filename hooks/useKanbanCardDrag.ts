@@ -61,6 +61,8 @@ interface DragState {
   /** The row's scrollLeft as the drag left it: any other value means the browser scrolled it. */
   expectedScrollLeft: number;
   laneId: string | null;
+  /** The gap in that lane the drop lands in: the card it goes before, or null for the lane's end. */
+  beforeCardId: string | null;
   ghost: boolean;
   /** The card's board-relative rect at pick-up: the clone stays there, offset by the pointer. */
   ghostOrig: { left: number; top: number; width: number } | null;
@@ -70,8 +72,10 @@ export interface KanbanCardDragView {
   cardId: string;
   /** "armed": a long-press picked the card up; "dragging": it follows the pointer. */
   phase: "armed" | "dragging";
-  /** The lane under the pointer, or null (between lanes, or over the source lane). */
+  /** The lane under the pointer, or null (between lanes). The source lane counts: dropping back reorders. */
   laneId: string | null;
+  /** The card the drop would land before in that lane; null = the lane's end. */
+  beforeCardId: string | null;
 }
 
 /** Stable: a card calls these from its own listeners. */
@@ -94,8 +98,8 @@ export interface KanbanCardDragOptions {
   /** The board container, the ghost's positioned parent. */
   boardRef: RefObject<HTMLElement | null>;
   ghostRef: RefObject<HTMLDivElement | null>;
-  /** Drop the card in that lane (a same-lane or refused move is the caller's reducer's no-op). */
-  onMove(cardId: string, laneId: string): void;
+  /** Drop the card at that gap: in any lane, the source included (a same-place drop is the reducer's no-op). */
+  onMove(cardId: string, laneId: string, beforeCardId: string | null): void;
   /** Menu mode only: the held press opens the card menu anchored to the card. */
   onLongPress(cardId: string, anchor: DOMRect): void;
 }
@@ -132,14 +136,29 @@ export function useKanbanCardDrag(options: KanbanCardDragOptions): KanbanCardDra
     const laneOf = (element: HTMLElement): string | null =>
       element instanceof Element && element.dataset ? element.dataset.kanbanLane ?? null : null;
 
-    /** The lane whose column holds the pointer; null between lanes. */
-    const dropFor = (drag: DragState): string | null => {
+    /**
+     * The card a drop at `clientY` lands before: the first card of the lane
+     * whose vertical midpoint is below the pointer. Null = the lane's end
+     * (also for an empty lane). The lane's own card list scrolls, so this
+     * reads rects, not offsets.
+     */
+    const insertionBefore = (laneEl: HTMLElement, clientY: number): string | null => {
+      for (const el of Array.from(laneEl.querySelectorAll<HTMLElement>("[data-kanban-card]"))) {
+        const r = el.getBoundingClientRect();
+        if (clientY < r.top + r.height / 2) return el.dataset.kanbanCard ?? null;
+      }
+      return null;
+    };
+
+    /** The lane whose column holds the pointer, and the gap the drop lands in; null between lanes. */
+    const dropFor = (drag: DragState): { laneId: string; beforeCardId: string | null } | null => {
       const row = optionsRef.current.rowRef.current;
       if (!row || !isRendered(row)) return null;
       for (const el of Array.from(row.querySelectorAll<HTMLElement>("[data-kanban-lane]"))) {
         const r = el.getBoundingClientRect();
         if (drag.clientX >= r.left && drag.clientX <= r.right && drag.clientY >= r.top && drag.clientY <= r.bottom) {
-          return laneOf(el);
+          const laneId = laneOf(el);
+          return laneId ? { laneId, beforeCardId: insertionBefore(el, drag.clientY) } : null;
         }
       }
       return null;
@@ -199,6 +218,7 @@ export function useKanbanCardDrag(options: KanbanCardDragOptions): KanbanCardDra
       }
       drag.phase = "cancelled";
       drag.laneId = null;
+      drag.beforeCardId = null;
       stopMotion(drag);
       setState(null);
     };
@@ -206,19 +226,19 @@ export function useKanbanCardDrag(options: KanbanCardDragOptions): KanbanCardDra
     const updateDrag = (force = false) => {
       const drag = dragRef.current;
       if (!drag || drag.phase !== "dragging") return;
-      const card = optionsRef.current.cards.find((c) => c.id === drag.cardId);
-      const source = card?.laneId ?? null;
       const hit = dropFor(drag);
-      const laneId = hit && hit !== source ? hit : null;
-      const changed = force || laneId !== drag.laneId;
+      const laneId = hit?.laneId ?? null;
+      const beforeCardId = hit?.beforeCardId ?? null;
+      const changed = force || laneId !== drag.laneId || beforeCardId !== drag.beforeCardId;
       drag.laneId = laneId;
+      drag.beforeCardId = beforeCardId;
       placeGhost();
       if (changed) publish(drag);
     };
 
     const publish = (drag: DragState) => {
       setState(drag.phase === "armed" || drag.phase === "dragging"
-        ? { cardId: drag.cardId, phase: drag.phase, laneId: drag.laneId }
+        ? { cardId: drag.cardId, phase: drag.phase, laneId: drag.laneId, beforeCardId: drag.beforeCardId }
         : null);
     };
 
@@ -320,12 +340,12 @@ export function useKanbanCardDrag(options: KanbanCardDragOptions): KanbanCardDra
       publish(drag);
     };
 
-    /** Drop the picked-up card if a lane is under the pointer: the one evaluation shared by a release, a cancel, and a release lost outside the window. */
+    /** Drop the picked-up card at the gap under the pointer: the one evaluation shared by a release, a cancel, and a release lost outside the window. */
     const dropAt = (drag: DragState) => {
-      const card = optionsRef.current.cards.find((c) => c.id === drag.cardId);
-      const source = card?.laneId ?? null;
       const drop = dropFor(drag);
-      if (drop && drop !== source) optionsRef.current.onMove(drag.cardId, drop);
+      // The source lane takes the card back too: that is a reorder, and a drop
+      // where it already was is the reducer's no-op (nothing is written).
+      if (drop) optionsRef.current.onMove(drag.cardId, drop.laneId, drop.beforeCardId);
     };
 
     function onPointerMove(event: PointerEvent) {
@@ -480,6 +500,7 @@ export function useKanbanCardDrag(options: KanbanCardDragOptions): KanbanCardDra
           frame: null,
           expectedScrollLeft: 0,
           laneId: null,
+          beforeCardId: null,
           ghost: false,
         };
         dragRef.current = drag;

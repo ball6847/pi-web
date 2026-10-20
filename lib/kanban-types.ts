@@ -91,7 +91,7 @@ export type KanbanAction =
   | { action: "add-card"; laneId: string; title: string; description?: string; sessionId?: string | null; sessionTitle?: string | null; cardId?: string }
   | { action: "edit-card"; cardId: string; title?: string; description?: string }
   | { action: "delete-card"; cardId: string }
-  | { action: "move-card"; cardId: string; laneId: string }
+  | { action: "move-card"; cardId: string; laneId: string; beforeCardId?: string | null }
   | { action: "advance-card"; cardId: string }
   | { action: "link-session"; cardId: string; sessionId: string; sessionTitle: string }
   | { action: "unlink-session"; cardId: string }

@@ -103,6 +103,36 @@ function MoreIcon({ size = 13 }: { size?: number }) {
   );
 }
 
+function ChevronIcon({ direction, size = 12 }: { direction: "up" | "down"; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {direction === "up" ? <polyline points="18 15 12 9 6 15" /> : <polyline points="6 9 12 15 18 9" />}
+    </svg>
+  );
+}
+
+/**
+ * The line a drag paints in the gap it would drop the card into (above the card
+ * it goes before, or below the lane's last one). Its `data-kanban-drop-line` is
+ * the test hook.
+ */
+function DropLine() {
+  return (
+    <div
+      data-kanban-drop-line
+      aria-hidden="true"
+      style={{
+        flexShrink: 0,
+        height: 2,
+        margin: "-3px 2px",
+        borderRadius: 1,
+        background: "var(--accent)",
+        boxShadow: "0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent)",
+      }}
+    />
+  );
+}
+
 function GhostButton({
   children,
   onClick,
@@ -950,6 +980,7 @@ function LaneColumn({
   onOpenSession,
   mobile,
   dropTarget,
+  dropBefore,
   invalid,
   invalidReason,
   dragSourceCardId,
@@ -977,6 +1008,8 @@ function LaneColumn({
   mobile: boolean;
   /** The drag's target lane is this one: the column tints to take the drop. */
   dropTarget: boolean;
+  /** The gap the drop would land in: the card it goes before, or null for the lane's end. */
+  dropBefore: string | null;
   /** The move-card rules refuse the card in flight for this lane: shown undroppable from pick-up. */
   invalid: boolean;
   /** The one-line reason shown in the lane's header while `invalid`. */
@@ -992,6 +1025,9 @@ function LaneColumn({
   const { t } = useI18n();
   const cards = cardsOfLane(board, lane.id);
   const formHere = form?.laneId === lane.id ? form : null;
+  // The drop line sits in the gap the release lands in: above the card it goes
+  // before, or after the lane's last one.
+  const dropAtEnd = dropTarget && !cards.some((card) => card.id === dropBefore);
   // One lane fills the phone screen in the single-lane mobile mode.
   const width = mobile ? "100%" : 250;
 
@@ -1103,26 +1139,29 @@ function LaneColumn({
           }
           const sessionGone = card.sessionId !== null && !sessionIds.has(card.sessionId);
           return (
-            <CardView
-              key={card.id}
-              lane={lane}
-              card={card}
-              isLastLane={isLast}
-              running={card.sessionId !== null && runningIds.has(card.sessionId)}
-              awaiting={card.sessionId !== null && awaitingIds.has(card.sessionId)}
-              unread={card.sessionId !== null && unreadIds.has(card.sessionId)}
-              sessionGone={sessionGone}
-              highlighted={highlightCardId === card.id}
-              dragSource={dragSourceCardId === card.id}
-              onOpenSession={onOpenSession}
-              onOpenMenu={onOpenMenu}
-              onEdit={(target) => onOpenForm(lane.id, target)}
-              onOpenLinkPicker={onOpenLinkPicker}
-              onCardPointerDown={(event) => onCardPointerDown(event, card.id)}
-              onCardTouchMove={onCardTouchMove}
-            />
+            <Fragment key={card.id}>
+              {dropTarget && dropBefore === card.id && <DropLine />}
+              <CardView
+                lane={lane}
+                card={card}
+                isLastLane={isLast}
+                running={card.sessionId !== null && runningIds.has(card.sessionId)}
+                awaiting={card.sessionId !== null && awaitingIds.has(card.sessionId)}
+                unread={card.sessionId !== null && unreadIds.has(card.sessionId)}
+                sessionGone={sessionGone}
+                highlighted={highlightCardId === card.id}
+                dragSource={dragSourceCardId === card.id}
+                onOpenSession={onOpenSession}
+                onOpenMenu={onOpenMenu}
+                onEdit={(target) => onOpenForm(lane.id, target)}
+                onOpenLinkPicker={onOpenLinkPicker}
+                onCardPointerDown={(event) => onCardPointerDown(event, card.id)}
+                onCardTouchMove={onCardTouchMove}
+              />
+            </Fragment>
           );
         })}
+        {dropTarget && dropAtEnd && <DropLine />}
         {/* A new card lands at the end of the lane, so its form does too. */}
         {formHere?.cardId === null && (
           <CardForm
@@ -1662,13 +1701,14 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
     rowRef,
     boardRef,
     ghostRef,
-    onMove: (cardId, laneId) => {
+    onMove: (cardId, laneId, beforeCardId) => {
       // A move the rules already refuse bounces back with no write; the
-      // lane's red marking said why during the drag.
+      // lane's red marking said why during the drag. A drop inside the source
+      // lane is a reorder (and a no-op when it lands where it already was).
       const card = board.cards.find((c) => c.id === cardId);
       const lane = board.lanes.find((l) => l.id === laneId);
-      if (!card || !lane || !canRestInLane(card, lane)) return;
-      if (kanbanMoveCard(projectDir, cardId, laneId)) setHighlightFlash(cardId);
+      if (!card || !lane || (card.laneId !== laneId && !canRestInLane(card, lane))) return;
+      if (kanbanMoveCard(projectDir, cardId, laneId, beforeCardId)) setHighlightFlash(cardId);
     },
     onLongPress: (cardId, anchor) => {
       const card = board.cards.find((c) => c.id === cardId);
@@ -1766,6 +1806,31 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
       label: t("kanban.menuEdit"),
       onSelect: () => openForm(menuCard.laneId, menuCard),
     });
+    // Ordering inside the lane: the keyboard and phone peer of dropping a card
+    // between two others (a drag cannot cross lanes on a phone's one-lane view).
+    const laneCards = cardsOfLane(board, menuCard.laneId);
+    const position = laneCards.findIndex((c) => c.id === menuCard.id);
+    const previous = position > 0 ? laneCards[position - 1] : null;
+    // One step down = before the card two places later; no such card = the end.
+    const twoDown = position >= 0 ? laneCards[position + 2] : undefined;
+    entries.push({
+      id: "move-up",
+      label: t("kanban.menuMoveUp"),
+      icon: <ChevronIcon direction="up" />,
+      disabled: !previous,
+      onSelect: () => {
+        if (previous && kanbanMoveCard(projectDir, menuCard.id, menuCard.laneId, previous.id)) setHighlightFlash(menuCard.id);
+      },
+    });
+    entries.push({
+      id: "move-down",
+      label: t("kanban.menuMoveDown"),
+      icon: <ChevronIcon direction="down" />,
+      disabled: position === laneCards.length - 1,
+      onSelect: () => {
+        if (kanbanMoveCard(projectDir, menuCard.id, menuCard.laneId, twoDown?.id ?? null)) setHighlightFlash(menuCard.id);
+      },
+    });
     // "Move to {lane}" for every other lane: the accessible (and keyboard)
     // counterpart of the drag. The board's rules gate the entries — a
     // sessionless card only rests in the backlog, a card with a session never does.
@@ -1814,7 +1879,10 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
           from { opacity: 0; transform: translateY(3px); }
           to { opacity: 1; transform: translateY(0); }
         }
-        [data-kanban-card] { animation: kanban-card-in 140ms ease-out both; }
+        /* No fill-mode: with "both" the animation's final opacity:1 kept beating
+           the inline one, so the dragged card never dimmed and the Done lane
+           never dimmed either. */
+        [data-kanban-card] { animation: kanban-card-in 140ms ease-out; }
         @media (prefers-reduced-motion: reduce) {
           [data-kanban-card] { animation: none; }
         }
@@ -1941,6 +2009,7 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
             onOpenSession={onOpenSession}
             mobile={mobile}
             dropTarget={dragView !== null && dragView.phase === "dragging" && dragView.laneId === lane.id && !dragInvalid}
+            dropBefore={dragView?.laneId === lane.id ? dragView.beforeCardId : null}
             invalid={dragInvalid}
             invalidReason={dragInvalid && dragCard ? (dragCard.sessionId === null ? t("kanban.menuMoveToSessionless") : t("kanban.backlogNoSessions")) : null}
             dragSourceCardId={dragView?.phase === "dragging" ? dragView.cardId : null}
