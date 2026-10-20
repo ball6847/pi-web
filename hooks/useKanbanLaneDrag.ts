@@ -99,6 +99,7 @@ export function useKanbanLaneDrag(options: LaneDragOptions): LaneDragApi {
     const drag = dragRef.current;
     if (drag && drag.timer !== null) window.clearTimeout(drag.timer);
     dragRef.current = null;
+    document.body.style.userSelect = "";
     const listeners = listenersRef.current;
     if (listeners) {
       window.removeEventListener("pointermove", listeners.move);
@@ -134,6 +135,9 @@ export function useKanbanLaneDrag(options: LaneDragOptions): LaneDragApi {
       // The fixed first lane never moves.
       if (laneId === opts.laneIds[0]) return;
       if (event.pointerType === "touch" && !opts.allowTouch) return;
+      // A pressed lane header must not start a text selection the drag then
+      // carries across the board (mice and trackpads alike).
+      event.preventDefault();
       const drag: LaneDragState = {
         pointerId: event.pointerId,
         pointerType: event.pointerType,
@@ -151,6 +155,8 @@ export function useKanbanLaneDrag(options: LaneDragOptions): LaneDragApi {
         const d = dragRef.current;
         if (!d || d.phase !== "pending") return;
         d.phase = "dragging";
+        // A picked-up lane must not drag a text selection along with it.
+        document.body.style.userSelect = "none";
         setDraggingLaneId(d.laneId);
       };
 
