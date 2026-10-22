@@ -996,6 +996,11 @@ export function AppShell() {
     setSystemTools(null);
     setSystemInfoLoading(false);
     setActiveTopPanel(null);
+    // New (sidebar, Ctrl+Alt+N, the bar's move) opens the fresh composer: the
+    // board view is an overlay over the chat layer, so without this the user
+    // presses New and stares at the same board. A card's "Start session"
+    // does the same before it gets here. The URL effect then drops `?board=`.
+    setCenterView("chat");
     if (isMobile) setSidebarOpen(false);
     router.replace(`?cwd=${encodeURIComponent(cwd)}`, { scroll: false });
     // The fresh composer takes the caret once it renders (#1313), unless the
