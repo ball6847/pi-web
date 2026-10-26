@@ -1,0 +1,141 @@
+{
+  "session": {
+    "id": "review-2026-10-26-kanban-tool",
+    "reviewed_at": "2026-10-26T03:40:05Z",
+    "reviewer": "reviewer / expert-code-review",
+    "target": {
+      "branch": "feat-harness-tool",
+      "base_branch": "origin/kanban",
+      "commits": [
+        "2df739b"
+      ],
+      "files": [
+        "components/AppShell.tsx",
+        "components/KanbanBoard.tsx",
+        "components/SessionTree.test.mjs",
+        "docs/agents/kanban.md",
+        "docs/agents/subagents.md",
+        "docs/agents/tools.md",
+        "e2e/README.md",
+        "lib/kanban-store.ts",
+        "lib/rpc-manager.ts",
+        "lib/subagent-codemode-scope.integration.test.mjs",
+        "lib/subagent-runtime.ts",
+        "lib/subagents.test.mjs",
+        "lib/subagents.ts",
+        "components/AppShell.kanban-sessions.test.mjs",
+        "components/KanbanBoard.sessions.test.mjs",
+        "docs/plans/kanban-agent-tool.md",
+        "docs/reports/kanban-tool-domain.md",
+        "docs/reports/kanban-tool-runtime.md",
+        "docs/reports/kanban-tool-ui.md",
+        "docs/reports/kanban-tool-verification.md",
+        "e2e/kanban-agent-smoke.mjs",
+        "lib/kanban-extension.integration.test.mjs",
+        "lib/kanban-extension.test.mjs",
+        "lib/kanban-extension.ts",
+        "lib/kanban-runtime.integration.test.mjs",
+        "lib/kanban-sessions.test.mjs",
+        "lib/kanban-sessions.ts",
+        "lib/kanban-tool-domain.test.mjs",
+        "lib/kanban-tool-domain.ts",
+        "lib/kanban-tool-schema.ts",
+        "lib/kanban-tool-store.test.mjs"
+      ]
+    },
+    "context": {
+      "language": "TypeScript / JavaScript",
+      "frameworks": [
+        "Next.js",
+        "React",
+        "Pi SDK",
+        "node:sqlite",
+        "node:test"
+      ],
+      "review_depth": "expert",
+      "focus_areas": [
+        "correctness",
+        "concurrency",
+        "data-integrity",
+        "security",
+        "error-handling",
+        "testing",
+        "api-design"
+      ]
+    }
+  },
+  "summary": {
+    "verdict": "approve",
+    "confidence": 0.9,
+    "overall_score": 10.0,
+    "one_liner": "No concrete code defects found; automated checks and the real Next/Pi smoke pass. The browser gate this review left open was closed afterwards with five captured-and-read screenshots (see the Markdown follow-up).",
+    "stats": {
+      "files_reviewed": 31,
+      "lines_added": 2178,
+      "lines_removed": 83,
+      "findings_total": 0,
+      "findings_by_severity": {
+        "blocker": 0,
+        "major": 0,
+        "minor": 0,
+        "nit": 0
+      }
+    }
+  },
+  "findings": [],
+  "positives": [
+    {
+      "title": "Ownership, patch and lane movement share one locked write",
+      "detail": "The agent reducer runs after current-board loading and actor revalidation under the existing queue/file lock. Foreign ownership and second-card claims refuse before editing. Existing-board writes and initial seed plus mutation are transactional. Tests cover both claim races, queued implicit targeting, unchanged loser text, cancellation after lock waiting, and injected SQLite failure rollback. An additional reviewer-only /tmp two-process race passed with one winner, winner-only text/link/lane and revision +1. No link-stealing reducer is used."
+    },
+    {
+      "title": "Partial updates, retry behavior and project identity match the plan",
+      "detail": "Omitted fields survive, empty descriptions clear, action-specific/unknown fields and blank titles refuse, and same-lane no-ops preserve order, timestamps, bytes and revision. Ordered custom lanes drive nextLaneId, including null at the end. Saved-session validation rejects unrelated actors, while actual Git worktree fixtures share a project board. Discovery neither initializes nor prunes; agent no-ops do not rewrite unrelated dead links."
+    },
+    {
+      "title": "Real SDK tests exercise resource-policy boundaries",
+      "detail": "Execute-time read-only checks apply to direct and nested calls. Normal sessions follow live persisted selections; children use resolved built-in tools rather than counting kanban as a coding capability. Spawn, reload, live/cold resume, RPC reopen, restrictive extension selectors, extension-only/skills-only profiles, Chat-only absence and non-widening legacy snapshots have executable coverage. Reserved Agent controls remain excluded. An additional reviewer-only normal pre-Kanban-loadout reopen check passed."
+    },
+    {
+      "title": "Child viewing and edit-link preservation are explicitly separated from manual linking",
+      "detail": "Board lookup includes worktree children, while ordinary manual choices remain top-level. Existing-child edit options survive catalogue lag and saving text alone leaves the link and saved title untouched. Actual callback/component tests cover card/chip/menu opening, desktop/mobile and cross-project contexts, deduplicated read-only tabs, and no chat/workspace switch or runtime request. Leaving SessionTree production code unchanged is justified: only family-root rows exist and already read their own card. These tests do not constitute browser interaction or screenshot evidence."
+    },
+    {
+      "title": "Independent verification passed without implementation fixes",
+      "detail": "Reviewer runs: clean-env full npm test 3096 passed/1 skipped/0 failed; targeted Kanban/UI suite 208 passed; documented unit-1 command 145 passed; tsc --noEmit --incremental false passed; npm run lint passed with the existing lib/kanban-client.test.mjs:620 unused-variable warning; git diff --check passed. Logs: /tmp/kanban-review-full.log, /tmp/kanban-review-tests.log, /tmp/kanban-review-unit1-exact.log, /tmp/kanban-review-tsc.log and /tmp/kanban-review-lint.log. Earlier builder evidence reported 3094 passed/1 skipped. Plain npm test's two environment-sensitive failures were already reproduced on baseline by the builders; no feature finding is assigned to them."
+    },
+    {
+      "title": "Smoke uses actual production routes, sessions and tools",
+      "detail": "Reviewer reran env -u KIMI_API_KEY -u XIAOMI_TOKEN_PLAN_SGP_API_KEY node e2e/kanban-agent-smoke.mjs successfully. A deterministic local provider issued real kanban calls and real Agent delegation; the child claimed, partially updated and completed its independent card while the complete parent card stayed unchanged, revision advanced and the transcript was readable. Log: /tmp/kanban-review-smoke.log. Shared test-results/kanban-agent-smoke artifacts can be overwritten by concurrent builder runs. The smoke does not open a browser or prove the client revision poll or viewer click."
+    },
+    {
+      "title": "Scope and implementation reports are consistent",
+      "detail": "Reviewed all tracked diffs and untracked feature files, including four implementation/verification reports and late documentation corrections. No dependency or SQL/schema change was introduced. New logic has real tests, not stubs; builders report red-before-green domain/runtime runs. The plan has enumerated required cases, not TC IDs or diagrams. Statistics describe the working-tree snapshot before reviewer artifacts, relative to HEAD 2df739b, not the complete branch history."
+    }
+  ],
+  "metrics": {
+    "maintainability": 9,
+    "readability": 9,
+    "security": 10,
+    "performance": 9,
+    "test_coverage_delta": "Substantial new domain/store/SDK/runtime/component coverage; no tests removed. Coverage percentage was not measured. Browser E2E visual/interaction verification remains outstanding."
+  },
+  "action_items": [],
+  "open_questions": [
+    {
+      "question": "Before marking plan unit 4 complete, can the owner enable Chrome remote debugging and verify live board polling plus opening the child read-only viewer at desktop/phone widths, capturing AND reading screenshots, or explicitly waive that acceptance gate? The user and builder report that the remote-debugging setting blocks this; no browser evidence is claimed. Code approval is not full-plan sign-off.",
+      "blocking": true
+    }
+  ],
+  "metadata": {
+    "schema_version": "1.0.0",
+    "generator": "expert-code-review",
+    "postReview": {
+      "by": "parent",
+      "planVerification": "complete",
+      "screenshots": "docs/reports/screenshots/kanban-agent-tool/ (5 captured and read via Playwright Chromium against the e2e --serve fixture)",
+      "codeChangedAfterReview": false,
+      "note": "browser_setup still refuses because Chrome remote debugging is off; screenshots were taken with Playwright instead."
+    }
+  }
+}

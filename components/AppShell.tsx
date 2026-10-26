@@ -15,6 +15,7 @@ import { KanbanBoard } from "./KanbanBoard";
 import { KanbanLaneStrip } from "./KanbanLaneStrip";
 import { cardForSession, sessionlessCardsByRecency } from "@/lib/kanban-shared";
 import { kanbanSearchForJump, kanbanSearchForProject, type KanbanSearchState } from "@/lib/kanban-search";
+import { sessionsForKanbanBoard } from "@/lib/kanban-sessions";
 import {
   kanbanAdvanceCard,
   kanbanBoardSnapshot,
@@ -594,6 +595,12 @@ export function AppShell() {
   // Subagent work tabs are session-scoped and transient: no persistence, and
   // they are dropped when the project changes (they belong to its sessions).
   const [agentTabs, setAgentTabs] = useState<{ sessionId: string; label: string }[]>([]);
+  /**
+   * The sub-agent row the agent switcher must focus after a hand-over from the
+   * read-only viewer. `nonce` re-fires the focus when the same row is asked for
+   * twice; the panel opens for it and AppShell clears it once the panel closes.
+   */
+  const [agentPanelFocus, setAgentPanelFocus] = useState<{ sessionId: string; nonce: number } | null>(null);
   const panelTabs: Tab[] = [
     ...fileTabs,
     ...terminalTabs.map((tab) => ({
@@ -1551,11 +1558,40 @@ export function AppShell() {
 
   const sessionBoardCard = selectedSession && contextBoard ? cardForSession(contextBoard, selectedSession.id) : null;
   const boardSessions = useMemo(
-    () => boardProjectDir
-      ? sessionsWithSelection.filter((session) => session.relation?.kind !== "subagent" && (session.projectRoot ?? session.cwd) === boardProjectDir)
-      : [],
+    () => sessionsForKanbanBoard(sessionsWithSelection, boardProjectDir),
     [boardProjectDir, sessionsWithSelection],
   );
+  const handleKanbanOpenSession = useCallback((sessionId: string, title: string) => {
+    const target = boardSessions.find((session) => session.id === sessionId);
+    if (!target) return;
+    if (target.relation?.kind === "subagent") {
+      // Viewing never selects/reopens the child. Keep the chat workspace too:
+      // a different project's board must not trigger changeFileWorkspace(),
+      // which drops agent tabs. The viewer reads the child by id alone.
+      handleOpenSubagentTab(target.id, target.name || target.firstMessage || title);
+    } else {
+      handleSelectSession(target);
+    }
+  }, [boardSessions, handleOpenSubagentTab, handleSelectSession]);
+  // The read-only viewer's hand-over: a sub-agent is prompted in its parent's
+  // chat, so select the parent and open the agent switcher on the child's row.
+  // The order matters — handleSelectSession() closes the top panel when the
+  // project changes, so the panel opens after it.
+  const handleOpenSubagentParentChat = useCallback((parentSessionId: string, childSessionId: string) => {
+    const parent = sessionsWithSelection.find((session) => session.id === parentSessionId);
+    if (!parent) return;
+    // Always select it, even when it is already the chat: handleSelectSession()
+    // is what leaves a `?board=` view for the chat, and it skips the remount.
+    handleSelectSession(parent);
+    setAgentPanelFocus({ sessionId: childSessionId, nonce: Date.now() });
+    setActiveTopPanel("agents");
+  }, [sessionsWithSelection, handleSelectSession]);
+  // The focus belongs to the hand-over, not to the panel: closing it forgets it,
+  // so reopening the switcher later leaves focus alone.
+  useEffect(() => {
+    if (activeTopPanel === "agents") return;
+    setAgentPanelFocus(null);
+  }, [activeTopPanel]);
   const kanbanStrip = (
     <KanbanLaneStrip
       board={contextBoard}
@@ -2700,6 +2736,8 @@ export function AppShell() {
                   subagents={activeSessionFamily.subagents}
                   selectedSessionId={selectedSession.id}
                   runningSessionIds={runningSessionIds}
+                  focusSessionId={agentPanelFocus?.sessionId ?? null}
+                  focusNonce={agentPanelFocus?.nonce ?? 0}
                   onSelectSession={handleSelectSession}
                   openSubagentTabIds={openSubagentTabIds}
                   onToggleSubagentTab={handleToggleSubagentTab}
@@ -2983,10 +3021,7 @@ export function AppShell() {
                   awaitingInputSessionIds={awaitingInputSessionIds}
                   unreadSessionIds={unreadSessionIds}
                   highlightCardId={boardHighlightCardId}
-                  onOpenSession={(sessionId) => {
-                    const target = sessionsWithSelection.find((session) => session.id === sessionId);
-                    if (target) handleSelectSession(target);
-                  }}
+                  onOpenSession={handleKanbanOpenSession}
                   onStartSession={handleKanbanStartSession}
                 />
               </div>
@@ -3170,6 +3205,7 @@ export function AppShell() {
               fallbackLabel={activeAgentTab.label}
               running={runningSessionIds.has(activeAgentTab.sessionId)}
               onOpenFile={handleOpenLinkedFile}
+              onOpenParentChat={handleOpenSubagentParentChat}
             />
           )}
         </div>

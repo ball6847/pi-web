@@ -13,6 +13,8 @@ interface Props {
   fallbackLabel: string;
   running: boolean;
   onOpenFile: (filePath: string, page?: number) => void;
+  /** Opens the calling agent's chat, where this sub-agent can be prompted (the notice above the transcript). */
+  onOpenParentChat?: (parentSessionId: string, childSessionId: string) => void;
 }
 
 const POLL_MS = 2000;
@@ -34,6 +36,53 @@ function toTranscript(page: Partial<SubagentTranscript>): SubagentTranscript {
 }
 
 /**
+ * Why this transcript takes no input, and the way out: the sub-agent is
+ * prompted from the main agent's chat, where its run lives. A viewer tab is a
+ * read-only projection by design (it polls entries, never a wrapper), so the
+ * notice names the place that can act and hands the user over.
+ */
+export function SubagentReadOnlyNotice({ onOpen }: { onOpen: () => void }) {
+  const { t } = useI18n();
+  return (
+    <div
+      role="note"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+        padding: "7px 12px",
+        borderBottom: "1px solid var(--border)",
+        background: "color-mix(in srgb, var(--accent) 7%, var(--bg-panel))",
+        color: "var(--text-muted)",
+        fontSize: 11.5,
+        lineHeight: 1.45,
+        flexShrink: 0,
+      }}
+    >
+      <span style={{ flex: 1, minWidth: 180 }}>{t("subagent.viewer.readOnly")}</span>
+      <button
+        type="button"
+        onClick={onOpen}
+        style={{
+          flexShrink: 0,
+          padding: "3px 9px",
+          border: "1px solid color-mix(in srgb, var(--accent) 40%, transparent)",
+          borderRadius: 6,
+          background: "var(--bg-panel)",
+          color: "var(--accent)",
+          fontSize: 11.5,
+          fontWeight: 600,
+          cursor: "pointer",
+        }}
+      >
+        {t("subagent.viewer.openMain")}
+      </button>
+    </div>
+  );
+}
+
+/**
  * Read-only view of a subagent's session, rendered in a right-panel tab.
  *
  * Live updates deliberately poll the context endpoint instead of opening the
@@ -43,7 +92,7 @@ function toTranscript(page: Partial<SubagentTranscript>): SubagentTranscript {
  * subagent run. Entry-level granularity: pi appends each finished entry
  * synchronously, so a 2 s poll shows the run at message/tool-call resolution.
  */
-export function SubagentViewer({ sessionId, fallbackLabel, running, onOpenFile }: Props) {
+export function SubagentViewer({ sessionId, fallbackLabel, running, onOpenFile, onOpenParentChat }: Props) {
   const { t, locale } = useI18n();
   const [info, setInfo] = useState<SessionInfo | null>(null);
   const [label, setLabel] = useState(fallbackLabel);
@@ -179,6 +228,7 @@ export function SubagentViewer({ sessionId, fallbackLabel, running, onOpenFile }
   const toolResults = useMemo(() => buildToolResultsMap(messages), [messages]);
   const relation = info?.relation?.kind === "subagent" ? info.relation : null;
   const status = running ? "running" as const : relation?.status ?? "completed" as const;
+  const parentSessionId = relation?.parentSessionId ?? null;
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -229,6 +279,10 @@ export function SubagentViewer({ sessionId, fallbackLabel, running, onOpenFile }
           </svg>
         </button>
       </div>
+
+      {parentSessionId && onOpenParentChat && (
+        <SubagentReadOnlyNotice onOpen={() => onOpenParentChat(parentSessionId, sessionId)} />
+      )}
 
       <div
         ref={listRef}
