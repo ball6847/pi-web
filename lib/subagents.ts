@@ -691,7 +691,8 @@ export function readSubagentSessionResources(
       typeof item === "string"
       && item.length > 0
       && !SUBAGENT_CONTROL_TOOLS.has(item)
-      && ((item === "codemode" && codemode) || SNAPSHOT_BUILTIN_TOOLS.has(item) || loadExtensions)
+      // Kanban is a host tool persisted by new children even when loadExtensions is off.
+      && (item === "kanban" || (item === "codemode" && codemode) || SNAPSHOT_BUILTIN_TOOLS.has(item) || loadExtensions)
     )
   ) {
     return {

@@ -564,6 +564,29 @@ test("group headers draw nothing for a drag while idle", () => {
   assert.doesNotMatch(html, /draggable/);
 });
 
+test("Kanban marks the family row's own card, not a child's independent card", () => {
+  const root = session("parent");
+  const child = session("child", { relation: { kind: "subagent", parentSessionId: root.id, profile: "x", description: "", status: "completed" } });
+  const model = buildSessionTree({
+    sessions: [root, child],
+    uiState: { version: 1, revision: 0, sessions: {}, projects: {} },
+    runningIds: new Set(), unreadIds: new Set(), selectedSessionId: child.id,
+    currentProject: { key: "/work/app", root: "/work/app" },
+    groupExpansion: {}, moreShown: {}, pinnedCollapsed: false,
+  });
+  assert.deepEqual(model.rows.filter((row) => row.kind === "session").map((row) => row.family.root.id), [root.id]);
+  const sessionIndex = new Map([
+    [root.id, { laneName: "Plan" }],
+    [child.id, { laneName: "Implement" }],
+  ]);
+  const props = { rows: model.rows, kanban: { sessionIndex, onOpenBoard: noop } };
+  const row = rowMarkup(render(props), "session:group:parent");
+  assert.match(row, /On board · Plan/);
+  assert.doesNotMatch(row, /On board · Implement/);
+  sessionIndex.delete(root.id);
+  assert.doesNotMatch(rowMarkup(render(props), "session:group:parent"), /session-tree-kanban/);
+});
+
 test("SessionTree.tsx has no RegExp lookbehind (Safari 16.2)", () => {
   assert.doesNotMatch(source, /\(\?<[=!]/, "no RegExp lookbehind (Safari 16.2)");
 });

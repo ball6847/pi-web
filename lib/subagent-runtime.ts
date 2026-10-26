@@ -23,6 +23,7 @@ import {
   SUBAGENT_META_TYPE,
   SUBAGENT_STATUS_TYPE,
   SUBAGENT_RESULT_TYPE,
+  SDK_BUILTIN_TOOLS,
   selectSubagentExtensionTools,
   subagentExtensionLoaderOptions,
   subagentToolOptions,
@@ -38,7 +39,8 @@ import { appendSubagentInputFiles, loadSubagentInputFiles, subagentInputLimits }
 import { projectTrustReloadOptions } from "./project-trust";
 import { createSubagentCodemodeExtension, createSubagentMcpExtensions } from "./builtin-extensions";
 import type { McpHost } from "./mcp-host";
-import { createSubagentMcpPolicyExtension } from "./mcp-read-only-policy";
+import { createSubagentMcpPolicyExtension, isReadOnlySelection } from "./mcp-read-only-policy";
+import { createKanbanExtension } from "./kanban-extension";
 import { resolveShellTools } from "./powershell-settings";
 import { isBuiltInSubagentsEnabled, readSubagentSettings } from "./subagent-settings";
 import { SubagentQueue } from "./subagent-queue";
@@ -405,8 +407,8 @@ export function createSubagentController(
             projectTrusted: () => settingsManager.isProjectTrusted(),
           })
         : undefined;
-      // The policy reads the child's tools once they are resolved below.
-      const mcpScope: { tools: readonly string[]; allExtensionTools?: boolean } = { tools: [] };
+      // Policies read the child's tools once resolved below, never a normal-session pin.
+      const toolScope: { tools: readonly string[]; allExtensionTools?: boolean } = { tools: [] };
       const mcp = mcpEnabled
         ? await createSubagentMcpExtensions({
             agentDir,
@@ -416,8 +418,13 @@ export function createSubagentController(
           })
         : undefined;
       const extensionFactories = [
+        // A host tool, including when loadExtensions is off or ext: selectors narrow resources.
+        // Filter to built-ins: Kanban must not turn an empty/extension-only profile read-only.
+        ...(!chatOnly ? [createKanbanExtension({
+          isReadOnly: () => isReadOnlySelection(toolScope.tools.filter((name) => SDK_BUILTIN_TOOLS.includes(name))),
+        })] : []),
         ...(codemodeExtension ? [codemodeExtension] : []),
-        ...(mcp ? [...mcp.extensions, createSubagentMcpPolicyExtension(() => mcpScope)] : []),
+        ...(mcp ? [...mcp.extensions, createSubagentMcpPolicyExtension(() => toolScope)] : []),
         ...(skillsBinding.loaderOptions.extensionFactories ?? []),
       ];
       if (!chatOnly) initTheme();
@@ -465,9 +472,10 @@ export function createSubagentController(
         withSubagentExtensionTools(profile.tools, extensionToolNames),
         settingsManager.getDefaultTools(),
       );
+      if (!chatOnly && !activeTools.includes("kanban")) activeTools.push("kanban");
       if (codemodeEnabled && !activeTools.includes("codemode")) activeTools.push("codemode");
-      mcpScope.tools = activeTools;
-      mcpScope.allExtensionTools = allExtensionTools;
+      toolScope.tools = activeTools;
+      toolScope.allExtensionTools = allExtensionTools;
 
       const sessionManager = isolatedWorktree
         ? SessionManager.create(childCwd, undefined, { parentSession: parent.sessionFile })

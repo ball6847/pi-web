@@ -44,6 +44,7 @@ import {
   subagentExtensionLoaderOptions,
   subagentToolOptions,
   SUBAGENT_CONTROL_TOOL_NAMES,
+  SDK_BUILTIN_TOOLS,
 } from "./subagents";
 import { createSubagentController } from "./subagent-runtime";
 import { isBuiltInSubagentsEnabled } from "./subagent-settings";
@@ -53,7 +54,8 @@ import { createExactSystemPromptExtension } from "./exact-system-prompt";
 import { createPiWebBuiltinExtensions, createSubagentCodemodeExtension, createSubagentMcpExtensions } from "./builtin-extensions";
 import type { McpHost } from "./mcp-host";
 import { mcpPromptPreparation, type McpCommandCandidate } from "./mcp-command";
-import { createReadOnlyMcpPolicyExtension, createSubagentMcpPolicyExtension } from "./mcp-read-only-policy";
+import { createReadOnlyMcpPolicyExtension, createSubagentMcpPolicyExtension, isReadOnlySelection } from "./mcp-read-only-policy";
+import { createKanbanExtension } from "./kanban-extension";
 import { createSubagentSkillsBinding } from "./subagent-skills";
 import { isNestedToolExecutionEvent } from "./agent-event-wire";
 import { collectLiveAssistantNotices, readShowCacheMissNotices, withSessionPrices } from "./transcript-notices-server";
@@ -263,9 +265,9 @@ const PLAIN_TEXT_THEME = new PlainTextTheme();
 const CUSTOM_UI_KEYBINDINGS = new TuiKeybindingsManager(TUI_KEYBINDINGS);
 
 // Tools that belong to the session, not to a branch of it: the ones that reach other tools,
-// and pi-web's subagent tools, which the built-in subagent setting switches on for the whole
-// session. Navigation keeps them although the target branch was recorded without them.
-const SESSION_TOOL_NAMES = new Set<string>(["codemode", "tool_search", ...SUBAGENT_CONTROL_TOOL_NAMES]);
+// and pi-web's host tools (Kanban and the subagent controls). Navigation keeps them although
+// the target branch was recorded without them; the board belongs to the session, not its branch.
+const SESSION_TOOL_NAMES = new Set<string>(["codemode", "tool_search", "kanban", ...SUBAGENT_CONTROL_TOOL_NAMES]);
 
 /**
  * The active tools for a coding tool selection. The selection replaces only the coding
@@ -2576,6 +2578,11 @@ export async function startRpcSession(
         ?? (chatOnly ? subagentResources.appendSystemPrompt[0] ?? "" : undefined),
     }) : undefined;
     const subagentExtensionFactories = [
+      // Eligibility is saved in tools, not inferred from today's profile. Older snapshots must
+      // not gain a host tool just because they loaded other resources.
+      ...(subagentResources?.tools.includes("kanban") ? [createKanbanExtension({
+        isReadOnly: () => isReadOnlySelection(subagentResources.tools.filter((name) => SDK_BUILTIN_TOOLS.includes(name))),
+      })] : []),
       ...(subagentCodemode ? [subagentCodemode] : []),
       ...(subagentMcp && subagentResources
         ? [...subagentMcp.extensions, createSubagentMcpPolicyExtension(() => subagentResources)]
@@ -2608,6 +2615,7 @@ export async function startRpcSession(
             extensionFactories: [
               ...(builtins?.extensions ?? []),
               createReadOnlyMcpPolicyExtension(),
+              createKanbanExtension(),
               createProjectCommandBashExtension({
                 cwd: sessionCwd,
                 settings: settingsManager,

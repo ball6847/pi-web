@@ -18,7 +18,11 @@ import {
   type KanbanSnapshot,
 } from "./kanban-data";
 import { applyKanbanAction, pruneDeadLinks } from "./kanban-shared";
-import { KANBAN_SCHEMA_VERSION, type KanbanAction, type KanbanBoard, type KanbanCard } from "./kanban-types";
+import {
+  applyKanbanToolMutation, kanbanToolMutationResult, kanbanToolRead, parseKanbanToolRequest,
+  type KanbanToolActor, type KanbanToolResult,
+} from "./kanban-tool-domain";
+import { KANBAN_SCHEMA_VERSION, makeKanbanId, type KanbanAction, type KanbanBoard, type KanbanCard } from "./kanban-types";
 import { isMcpEntryRefusal, validateMcpProject } from "./mcp-entry-request";
 import { readRegularFileText } from "./regular-file";
 import { invalidateSessionPathCache, readSessionHeader, resolveSessionPath } from "./session-reader";
@@ -85,6 +89,12 @@ export class KanbanLockedError extends Error {
 /** The file was written by a newer pi-web: it is left alone, not set aside. */
 class KanbanSchemaError extends Error {}
 
+class KanbanCancelledError extends Error {}
+
+function checkKanbanSignal(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new KanbanCancelledError("Kanban call cancelled before writing. Read the board before retrying a creation.");
+}
+
 function failure(code: KanbanFailureCode, error: string): KanbanFailure {
   return { ok: false, code, error };
 }
@@ -104,6 +114,7 @@ function isBusy(error: unknown): boolean {
 }
 
 function toFailure(error: unknown): KanbanFailure {
+  if (error instanceof KanbanCancelledError) return failure("refused", error.message);
   if (error instanceof KanbanLockedError) return failure("locked", error.message);
   if (error instanceof KanbanSchemaError) return failure("unsupported-schema", error.message);
   if (isBusy(error)) return failure("locked", "Another process is writing the kanban board");
@@ -210,6 +221,7 @@ function openBoard(path: string, projectDir: string): Opened {
     case "missing":
       return { kind: "missing" };
     case "newer":
+      if (db) closeKanbanDatabase(db);
       return { kind: "newer", version: state.version };
     case "corrupt":
       return { kind: "corrupt", error: state.error };
@@ -484,22 +496,24 @@ function backUpUnusableBoard(path: string): void {
 // Locked read-modify-write
 // ---------------------------------------------------------------------------
 
-type EditResult = { board: KanbanBoard } | { refused: true };
+type EditResult = { board: KanbanBoard } | KanbanFailure;
 
 /**
  * Under the in-process queue and the file's lock: opens the board (a missing
  * file is seeded by the import or started with the default lanes; an unusable
  * one is set aside and replaced; a newer one is refused), applies `edit`, and
- * writes the rows when the edit returned a different board. A refused edit
- * still materializes a missing file, so the next read sees a real revision.
+ * writes the rows when the edit returned a different board. By default a
+ * refused edit still materializes a missing file; agent calls opt out.
  * The connection is closed and the lock released on every path.
  */
 async function editBoard(
   projectRoot: string,
   edit: (board: KanbanBoard, now: number) => Promise<EditResult>,
-): Promise<{ ok: true; board: KanbanBoard; revision: number } | { ok: false; refused: true }> {
+  options: { signal?: AbortSignal; materializeRefused?: boolean } = {},
+): Promise<KanbanBoardResult> {
   const path = kanbanBoardPath(projectRoot);
   return serializeByKey(QUEUE_KEY, path, async () => {
+    checkKanbanSignal(options.signal);
     mkdirSync(dirname(path), { recursive: true });
     let release: () => Promise<void>;
     try {
@@ -509,39 +523,35 @@ async function editBoard(
       throw error;
     }
     try {
+      // Cancellation may have arrived while either queue/lock was held by another writer.
+      checkKanbanSignal(options.signal);
       const opened = openBoard(path, projectRoot);
-      // One store connection per edit: the caller's edits close over it.
+      let createdDb: DatabaseSync | undefined;
       try {
         if (opened.kind === "newer") throw new KanbanSchemaError(unsupportedSchemaMessage(opened.version));
-        let board: KanbanBoard;
+        const seed = opened.kind === "ready" ? null : await seedBoard(projectRoot);
+        const board = opened.kind === "ready" ? opened.snapshot.board : seed!.board;
+        checkKanbanSignal(options.signal);
+        const result = await edit(board, Date.now());
+        checkKanbanSignal(options.signal);
+        // Agent refusals must not initialize, migrate or repair a board. The
+        // browser's existing materializing-refusal behavior remains the default.
+        if ("ok" in result && options.materializeRefused === false) return result;
+        const next = "board" in result ? result.board : board;
         let db: DatabaseSync;
-        let sources: ImportedSource[] = [];
         if (opened.kind === "ready") {
-          board = opened.snapshot.board;
           db = opened.db;
+          if (next !== board) inTransaction(db, () => writeBoardRows(db, next));
         } else {
           if (opened.kind === "corrupt") backUpUnusableBoard(path);
-          // Every file that is not a board starts the same way: from the JSON
-          // import when there is one (moved aside once its content is safe),
-          // otherwise the default lanes. That includes a 0-byte file left by an
-          // interrupted first open — it holds no board to keep.
-          const seed = await seedBoard(projectRoot);
-          board = seed.board;
-          sources = seed.sources;
-          db = opened.kind === "empty" ? opened.db : openKanbanDatabase(path, { timeout: DB_TIMEOUT_MS });
-          initializeBoard(db, board);
+          db = opened.kind === "empty" ? opened.db : (createdDb = openKanbanDatabase(path, { timeout: DB_TIMEOUT_MS }));
+          // The first successful mutation and seed land in one transaction too.
+          initializeBoard(db, next);
         }
-        const result = await edit(board, Date.now());
-        if ("refused" in result) {
-          for (const source of sources) retireImportedFile(source);
-          return { ok: false as const, refused: true as const };
-        }
-        if (result.board !== board) {
-          inTransaction(db, () => writeBoardRows(db, result.board));
-        }
-        for (const source of sources) retireImportedFile(source);
-        return { ok: true as const, board: result.board, revision: readBoardRevision(db) };
+        for (const source of seed?.sources ?? []) retireImportedFile(source);
+        return "ok" in result ? result : { ok: true, board: next, revision: readBoardRevision(db) };
       } finally {
+        if (createdDb) closeKanbanDatabase(createdDb);
         closeOpened(opened);
       }
     } finally {
@@ -582,18 +592,14 @@ export async function readBoard(cwd: string, options: { create?: boolean } = {})
       const alive = await aliveSessions(projectRoot, board);
       // Nothing dead: answer the read without taking the lock or writing.
       if (linkedSessionIds(board).every((id) => alive.has(id))) return { ok: true, board, revision };
-      return editedResult(await editBoard(projectRoot, async (fresh, now) => ({ board: await pruneBoard(projectRoot, fresh, now) })));
+      return await editBoard(projectRoot, async (fresh, now) => ({ board: await pruneBoard(projectRoot, fresh, now) }));
     }
     closeOpened(opened);
     if (options.create === false) return { ok: true, board: freshBoard(projectRoot), revision: 0 };
-    return editedResult(await editBoard(projectRoot, async (board, now) => ({ board: await pruneBoard(projectRoot, board, now) })));
+    return await editBoard(projectRoot, async (board, now) => ({ board: await pruneBoard(projectRoot, board, now) }));
   } catch (error) {
     return toFailure(error);
   }
-}
-
-function editedResult(edited: Awaited<ReturnType<typeof editBoard>>): KanbanBoardResult {
-  return edited.ok ? edited : failure("internal", "The board could not be read");
 }
 
 /** The session a mutation links a card to, if any. */
@@ -610,11 +616,53 @@ function actionSessionId(action: KanbanAction): string | null {
 }
 
 /**
- * One mutation: the folder is checked, a session the action links must exist
- * (`session-missing`), then under the lock the reducer for the action runs on
- * the freshly read board; a refusal by the rules is `refused`. The resulting
- * board is pruned of dead links, written in one transaction, and returned with
- * its new revision. A refusal writes nothing but a newly materialized file.
+ * The agent-only API. Identity comes from the executing session, never tool
+ * arguments. Both implicit target resolution and ownership guards run on the
+ * current board under the browser's existing queue/file lock. Unlike browser
+ * edits this does not prune unrelated links (nor steal a dead owner's card).
+ */
+export async function executeKanbanToolRequest(
+  cwd: string,
+  actor: KanbanToolActor,
+  input: unknown,
+  signal?: AbortSignal,
+): Promise<KanbanToolResult> {
+  const parsed = parseKanbanToolRequest(input);
+  if (!parsed.ok) return parsed;
+  const { request } = parsed;
+  try {
+    checkKanbanSignal(signal);
+    const valid = await validateKanbanCwd(cwd);
+    if (!valid.ok) return valid;
+    const projectRoot = await boardProjectRoot(valid.cwd);
+    if (!(await validateSession(projectRoot, actor.sessionId))) {
+      return failure("session-missing", "The executing session does not exist in this project yet. Wait for its session file to be saved, then retry.");
+    }
+    checkKanbanSignal(signal);
+    if (request.action === "read") {
+      const snapshot = await readBoard(valid.cwd, { create: false });
+      return snapshot.ok ? kanbanToolRead(snapshot.board, snapshot.revision, actor.sessionId, request.cardId) : snapshot;
+    }
+    let cardId = "";
+    const edited = await editBoard(projectRoot, async (board, now) => {
+      // Session files can disappear while waiting for the lock, too.
+      if (!(await validateSession(projectRoot, actor.sessionId))) return failure("session-missing", "The executing session no longer exists in this project.");
+      const next = applyKanbanToolMutation(board, request, actor, now, makeKanbanId());
+      if (!next.ok) return next;
+      cardId = next.cardId;
+      return { board: next.board };
+    }, { signal, materializeRefused: false });
+    return edited.ok ? kanbanToolMutationResult(edited.board, edited.revision, actor.sessionId, cardId, request.action) : edited;
+  } catch (error) {
+    return toFailure(error);
+  }
+}
+
+/**
+ * One browser mutation: the folder is checked, a session the action links must
+ * exist (`session-missing`), then under the lock the reducer runs on the fresh
+ * board. Dead links are pruned and the result written in one transaction. A
+ * refusal writes nothing but a newly materialized file.
  */
 export async function applyMutation(cwd: string, action: KanbanAction): Promise<KanbanBoardResult> {
   const valid = await validateKanbanCwd(cwd);
@@ -625,11 +673,10 @@ export async function applyMutation(cwd: string, action: KanbanAction): Promise<
     if (sessionId !== null && !(await validateSession(projectRoot, sessionId))) {
       return failure("session-missing", "That session does not exist in this project");
     }
-    const edited = await editBoard(projectRoot, async (board, now) => {
+    return await editBoard(projectRoot, async (board, now) => {
       const next = applyKanbanAction(board, action, now);
-      return next ? { board: await pruneBoard(projectRoot, next, now) } : { refused: true };
+      return next ? { board: await pruneBoard(projectRoot, next, now) } : failure("refused", `The board's rules refuse "${action.action}" here`);
     });
-    return edited.ok ? edited : failure("refused", `The board's rules refuse "${action.action}" here`);
   } catch (error) {
     return toFailure(error);
   }

@@ -61,7 +61,28 @@ Coverage:
 - A local extension checks dialog keyboard navigation, Esc cancellation,
   collapse/expand draft preservation, countdown display, and server-side expiry.
 
-Model prompts, live model streaming, and agent execution are outside this suite.
+Model prompts, live model streaming, and agent execution are outside the general suite.
+
+## Kanban agent smoke test
+
+`node e2e/kanban-agent-smoke.mjs` runs real Next routes, Pi sessions and the
+host `kanban`/`Agent` tools with a deterministic local provider (no model
+credentials). It creates a parent card in Plan and a separate Backlog card,
+starts a dedicated child, claims and partially updates the child card, and
+moves it to Done while asserting that the parent's card stays unchanged.
+The child transcript and revision changes are checked through the read APIs.
+
+Use a checkout without an active dev server. The script uses an available
+loopback port and an isolated temporary agent directory. It removes only its
+own fixture data on exit. Logs and results remain under
+`test-results/kanban-agent-smoke/`.
+
+For visual verification, run `node e2e/kanban-agent-smoke.mjs --serve` and open
+`boardUrl` from that directory's `fixture.json`. The fixture pauses before
+delegation: POST `delegateCommand` to `base + delegatePath` to watch revision
+polling move the card live. Open the child card's session chip to inspect its
+read-only transcript; check desktop and phone layouts. Stop with Ctrl+C when
+done. This inspection mode does not launch or control a browser.
 Failures save a screenshot, Playwright trace, and server log under
 `test-results/e2e/`; CI uploads that directory. Open a trace with
 `npx playwright show-trace test-results/e2e/trace.zip`.
