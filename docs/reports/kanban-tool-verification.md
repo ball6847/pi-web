@@ -54,3 +54,11 @@ Requested after the review: a card must say when a sub-agent does the work, and 
 | [8 — hand-over](screenshots/kanban-agent-tool/8-handover-parent-chat.png) | The button selects the parent (the board view gives way to Chat: composer present, `[data-kanban-lane]` gone) and opens the agents panel with the child's row focused (`document.activeElement` is the `role="option"` row "Fix the unrelated flaky test · board-worker"). Console: no errors. |
 
 The viewer itself gained no input and no agent route: the hand-over is the only action, and it lands on the parent's chat, where the child is prompted.
+
+## Rebase onto the search feature (#16)
+
+`origin/kanban` moved to `b67309d feat(kanban): filter cards by text search (#16)` while the PR was open, conflicting in `components/KanbanBoard.tsx` and `components/AppShell.tsx` (imports and prop types). Both sides were kept: the search imports and the `query`/`onQueryChange` props alongside the session projection and the chip's `subagent` prop, with the `sessions` doc kept as the behaviour actually is (all sessions, manual links top-level).
+
+The sub-agent harness in `components/KanbanBoard.sessions.test.mjs` stubs identifiers by hand, so it now loads the real `lib/kanban-search.ts`, stubs the three `KanbanSearch*` elements, and passes an empty query like the page does.
+
+Post-rebase evidence: [9 — board after the rebase](screenshots/kanban-agent-tool/9-after-rebase-board.png) shows the merged search field ("Filter cards…") beside the unchanged sub-agent chip on the Done card and the parent's card; typing `Ship minimal` filters the board to that one card with all six lanes still listed. Console: no errors. Full suite: 3,126 passed, 1 skipped.
