@@ -7,6 +7,10 @@ import { createJiti } from "jiti";
 import * as hooks from "../hooks/__fixtures__/react-hook-shim.mjs";
 import { kanbanSessionOptions } from "../lib/kanban-sessions.ts";
 const { cardsOfLane, canRestInLane } = await createJiti(import.meta.url).import("../lib/kanban-shared.ts");
+// The board's text search came with the search feature; the card and the view
+// both read it, so the harness runs the real module (a stub would hide a
+// broken highlight or filter).
+const { kanbanDescriptionExcerpt, normalizeKanbanQuery, searchKanbanBoard } = await createJiti(import.meta.url).import("../lib/kanban-search.ts");
 
 // Drive the actual component functions and their event props with the shared
 // hook harness. Child elements stay opaque: layout/portals/drag are not under
@@ -37,6 +41,7 @@ function setup() {
     useI18n: () => ({ t: (key) => key }),
     useIsMobile: () => false,
     kanbanSessionOptions, cardsOfLane, canRestInLane,
+    kanbanDescriptionExcerpt, normalizeKanbanQuery, searchKanbanBoard,
     window: { addEventListener: noop, removeEventListener: noop },
     document: { addEventListener: noop, removeEventListener: noop },
     readViewport: () => ({ width: 1000, height: 800 }),
@@ -46,7 +51,7 @@ function setup() {
   for (const name of ["kanbanUpdateCard", "kanbanLinkCard", "kanbanUnlinkCard", "kanbanAddCard"]) {
     context[name] = (...args) => calls.push([name, ...args]);
   }
-  for (const name of ["Fragment", "KanbanIcon", "ChatIcon", "MoreIcon", "LinkIcon", "ChevronIcon", "SpinnerIcon", "GhostButton", "DropLine", "ColumnDropLine", "LaneDragGhost", "LaneConfig", "CardMenu", "SessionPicker"]) context[name] = name;
+  for (const name of ["Fragment", "KanbanIcon", "ChatIcon", "MoreIcon", "LinkIcon", "ChevronIcon", "SpinnerIcon", "GhostButton", "DropLine", "ColumnDropLine", "LaneDragGhost", "LaneConfig", "CardMenu", "SessionPicker", "KanbanSearchField", "KanbanSearchText", "KanbanSearchStyles"]) context[name] = name;
   vm.runInContext(compiled, context);
   const mounted = [];
   return {
@@ -77,6 +82,7 @@ function boardProps(sessions, cards = [card]) {
   return {
     board: { projectDir: "/project", lanes: [lane], cards },
     projectDir: "/project", projectName: "project", sessions,
+    query: "", onQueryChange: noop,
     runningSessionIds: new Set([child.id]), awaitingInputSessionIds: new Set(), unreadSessionIds: new Set(),
     onOpenSession: noop, onStartSession: noop,
   };
