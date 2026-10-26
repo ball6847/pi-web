@@ -1506,13 +1506,28 @@ export function AppShell() {
   // same project (a worktree) keeps it: the board belongs to the project
   // root, not the worktree. composerBoardDir null (a session is selected)
   // also clears it.
+  //
+  // The comparison is by board, not by spelling. A worktree cwd is its own
+  // "project root" until the sidebar's worktree listing arrives
+  // (`contextForCwd` falls back to `{ root: cwd }`), so the composer's dir goes
+  // worktree path → project root a beat after it mounts. Both name the one
+  // board the pick was made on: the pick is re-pinned to the resolved dir
+  // rather than dropped — dropping it silently started the session untracked
+  // whenever the card was picked in that first beat (the intermittent "the
+  // composer's card did not attach"). Only a dir that resolves to a different
+  // project root clears the choice.
   useEffect(() => {
-    setNewSessionKanbanPending((current) => (
-      !current || current.kind === "off" || (composerBoardDir !== null && current.projectDir === composerBoardDir)
-        ? current
-        : KANBAN_OFF_PENDING
-    ));
-  }, [composerBoardDir]);
+    setNewSessionKanbanPending((current) => {
+      if (!current || current.kind === "off") return current;
+      if (composerBoardDir === null) return KANBAN_OFF_PENDING;
+      if (current.projectDir === composerBoardDir) return current;
+      const resolved = contextForCwd(sidebarNewSessionContext, current.projectDir, newSessionMoveRef.current).project?.root
+        ?? current.projectDir;
+      return resolved === composerBoardDir
+        ? { ...current, projectDir: composerBoardDir }
+        : KANBAN_OFF_PENDING;
+    });
+  }, [composerBoardDir, sidebarNewSessionContext]);
   // The bar reports a pick without the board's project root; the shell pins
   // the pending choice to the board it was made for.
   const handleNewSessionKanbanPick = useCallback((pick: KanbanNewSessionPick) => {

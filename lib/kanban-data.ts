@@ -36,11 +36,12 @@ CREATE TABLE meta (
 ) STRICT;
 
 CREATE TABLE lanes (
-  id          TEXT PRIMARY KEY,
-  position    INTEGER NOT NULL,
-  name        TEXT NOT NULL,
-  description TEXT NOT NULL,
-  fixed       INTEGER NOT NULL DEFAULT 0
+  id           TEXT PRIMARY KEY,
+  position     INTEGER NOT NULL,
+  name         TEXT NOT NULL,
+  description  TEXT NOT NULL,
+  instructions TEXT NOT NULL DEFAULT '',
+  fixed        INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
 CREATE TABLE cards (
@@ -108,16 +109,15 @@ export function closeKanbanDatabase(db: DatabaseSync): void {
 // ---------------------------------------------------------------------------
 
 /**
- * What is at the board path:
- * - `ready`: a board file of this schema version (`user_version` is the schema stamp);
- * - `missing`: no file at all — nothing is created by looking;
- * - `empty`: a file that is a valid SQLite database but carries no board schema
- *   (a 0-byte file left by an interrupted first open, or a stray database);
- * - `newer`: a board written by a newer pi-web, left alone;
- * - `corrupt`: not a SQLite database (garbage, a truncated file, …).
+ * The file's state is `ready` (this schema), `migrate` (an older schema this
+ * build upgrades in place), `missing` (nothing is created by looking), `empty`
+ * (a valid SQLite file with no board schema — what an interrupted first open
+ * leaves), `newer` (a `user_version` above this build's) or `corrupt` (not a
+ * database: garbage, truncation).
  */
 export type KanbanFileState =
   | { kind: "ready" }
+  | { kind: "migrate"; from: number }
   | { kind: "missing" }
   | { kind: "empty" }
   | { kind: "newer"; version: number }
@@ -127,6 +127,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** The schema stamp in the file (`PRAGMA user_version`; 0 = no stamp). */
+function readSchemaVersion(db: DatabaseSync): number {
+  const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
+  return Number(row?.user_version ?? 0);
+}
+
 /** Opens the file only when it exists: looking at a board never creates one. */
 function openExisting(path: string, options: KanbanDbOptions): DatabaseSync | null {
   return existsSync(path) ? openKanbanDatabase(path, options) : null;
@@ -134,31 +140,30 @@ function openExisting(path: string, options: KanbanDbOptions): DatabaseSync | nu
 
 /**
  * The state of the file, and the open connection when there is one to use.
- * Opening does not write; only `initializeBoard` and `writeBoardRows` do.
+ * Opening does not write; only `migrateKanbanDatabase`, `initializeBoard` and
+ * `writeBoardRows` do.
  */
 export function inspectKanbanFile(path: string, options: KanbanDbOptions = {}): { state: KanbanFileState; db: DatabaseSync | null } {
   const db = openExisting(path, options);
   if (!db) return { state: { kind: "missing" }, db: null };
   let version: number;
   try {
-    const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
-    version = Number(row?.user_version ?? 0);
+    version = readSchemaVersion(db);
   } catch (error) {
     // `PRAGMA user_version` on garbage answers SQLITE_NOTADB: it is not ours.
     closeKanbanDatabase(db);
     return { state: { kind: "corrupt", error: errorMessage(error) }, db: null };
   }
   if (version > KANBAN_SCHEMA_VERSION) return { state: { kind: "newer", version }, db };
-  if (version !== KANBAN_SCHEMA_VERSION) {
-    // A version stamp this build does not know, and any tables that are not
-    // ours, mean the file is not a board of this schema: only a file with
-    // neither (a 0-byte file left by an interrupted first open) is adopted.
-    const tables = tableCount(db);
-    if (version === 0 && tables === 0) return { state: { kind: "empty" }, db };
-    closeKanbanDatabase(db);
-    return { state: { kind: "corrupt", error: `the database holds no kanban board of schema ${KANBAN_SCHEMA_VERSION}` }, db: null };
-  }
-  return { state: { kind: "ready" }, db };
+  if (version === KANBAN_SCHEMA_VERSION) return { state: { kind: "ready" }, db };
+  // A version stamp this build does not know, and any tables that are not
+  // ours, mean the file is not a board of this schema: only a file with
+  // neither (a 0-byte file left by an interrupted first open) is adopted.
+  const tables = tableCount(db);
+  if (version === 0 && tables === 0) return { state: { kind: "empty" }, db };
+  if (version >= 1 && tables > 0) return { state: { kind: "migrate", from: version }, db };
+  closeKanbanDatabase(db);
+  return { state: { kind: "corrupt", error: `the database holds no kanban board of schema ${KANBAN_SCHEMA_VERSION}` }, db: null };
 }
 
 function tableCount(db: DatabaseSync): number {
@@ -166,6 +171,40 @@ function tableCount(db: DatabaseSync): number {
     | { n?: number }
     | undefined;
   return Number(row?.n ?? 0);
+}
+
+// ---------------------------------------------------------------------------
+// Migration
+// ---------------------------------------------------------------------------
+
+/**
+ * One step per schema version, keyed by the version it migrates FROM. Each
+ * step is additive and lossless: an existing board keeps every row and its
+ * revision, and the new columns arrive with their defaults.
+ */
+const MIGRATIONS: Record<number, string[]> = {
+  // v1 -> v2: lanes gain the model-facing instructions.
+  1: ["ALTER TABLE lanes ADD COLUMN instructions TEXT NOT NULL DEFAULT ''"],
+};
+
+/**
+ * Upgrades an older board file to `KANBAN_SCHEMA_VERSION` in place: the steps
+ * from its stamp up, each inside the caller's transaction (the store calls
+ * this under its file lock; `BEGIN IMMEDIATE` re-checked makes two concurrent
+ * openers safe — the second one finds the stamp already current and no-ops).
+ * A failure rolls back, leaving the file at its old version. No revision bump:
+ * the data is unchanged, only its storage.
+ */
+export function migrateKanbanDatabase(db: DatabaseSync): void {
+  if (readSchemaVersion(db) === KANBAN_SCHEMA_VERSION) return;
+  inTransaction(db, () => {
+    let from = readSchemaVersion(db);
+    while (from < KANBAN_SCHEMA_VERSION) {
+      for (const statement of MIGRATIONS[from] ?? []) db.exec(statement);
+      from += 1;
+      db.exec(`PRAGMA user_version = ${from}`);
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +275,7 @@ interface LaneRow {
   position: number;
   name: string;
   description: string;
+  instructions: string;
   fixed: number;
 }
 
@@ -253,6 +293,8 @@ interface CardRow {
 
 function toLane(row: LaneRow): KanbanLane {
   const lane: KanbanLane = { id: row.id, name: row.name, description: row.description };
+  // Absent when empty, so an untouched board's lanes keep their old shape.
+  if (row.instructions) lane.instructions = row.instructions;
   if (row.position === 0 || row.fixed === 1) lane.fixed = true;
   return lane;
 }
@@ -289,7 +331,7 @@ export interface KanbanSnapshot {
  */
 export function readBoardRows(db: DatabaseSync, projectDir: string): KanbanSnapshot {
   return inReadTransaction(db, () => {
-    const laneRows = db.prepare("SELECT id, position, name, description, fixed FROM lanes ORDER BY position").all() as unknown as LaneRow[];
+    const laneRows = db.prepare("SELECT id, position, name, description, instructions, fixed FROM lanes ORDER BY position").all() as unknown as LaneRow[];
     const lanes = laneRows.map(toLane);
     const backlog = lanes.find((lane) => lane.fixed) ?? lanes[0];
     const cardRows = db
@@ -327,9 +369,9 @@ export function readBoardRows(db: DatabaseSync, projectDir: string): KanbanSnaps
 export function writeBoardRows(db: DatabaseSync, board: KanbanBoard): number {
   db.exec("DELETE FROM cards");
   db.exec("DELETE FROM lanes");
-  const lane = db.prepare("INSERT INTO lanes (id, position, name, description, fixed) VALUES (?, ?, ?, ?, ?)");
+  const lane = db.prepare("INSERT INTO lanes (id, position, name, description, instructions, fixed) VALUES (?, ?, ?, ?, ?, ?)");
   for (const [position, entry] of board.lanes.entries()) {
-    lane.run(entry.id, position, entry.name, entry.description, entry.fixed ? 1 : 0);
+    lane.run(entry.id, position, entry.name, entry.description, entry.instructions ?? "", entry.fixed ? 1 : 0);
   }
   const card = db.prepare(
     "INSERT INTO cards (id, position, lane_id, title, description, session_id, session_title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -345,7 +387,9 @@ export function writeBoardRows(db: DatabaseSync, board: KanbanBoard): number {
 /**
  * Creates the board schema and its opening revision (`1`), in one transaction:
  * the default lanes for a board that has never been written, or the rows of a
- * board being put in place (the JSON import).
+ * board being put in place (the JSON import). The caller has checked the file
+ * is not an older board — those are migrated by `migrateKanbanDatabase`, never
+ * re-created.
  */
 export function initializeBoard(db: DatabaseSync, board: KanbanBoard): number {
   return inTransaction(db, () => {

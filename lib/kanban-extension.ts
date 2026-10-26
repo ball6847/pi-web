@@ -5,7 +5,7 @@ import { parseKanbanToolRequest, type KanbanToolResult } from "./kanban-tool-dom
 import { KanbanToolOutputSchema, KanbanToolParameters } from "./kanban-tool-schema";
 import { isReadOnlySelection } from "./mcp-read-only-policy";
 import { readSessionToolSelection } from "./session-tool-selection";
-import { KANBAN_NOTICE_LANE_LIMIT } from "./kanban-tool-limits";
+import { KANBAN_LANE_INSTRUCTIONS_MAX, KANBAN_NOTICE_LANE_LIMIT } from "./kanban-tool-limits";
 import type { KanbanCard, KanbanLane } from "./kanban-types";
 import type { SessionEntry } from "./types";
 
@@ -22,12 +22,23 @@ export const KANBAN_CARD_NOTICE_TYPE = "pi-web:kanban-card";
 /** What "no card" hashes to, so a link coming and going is one comparison. */
 export const KANBAN_NO_CARD = "none";
 
-/** The two halves of a notice's state, kept apart so a card change never re-sends the lanes. */
+/** What "no lane instructions" hashes to: no card, no lane, or a lane without them. */
+export const KANBAN_NO_LANE_INSTRUCTIONS = "none";
+
+/** The dismiss line after the card leaves an instructed lane (or its instructions are cleared). */
+export const KANBAN_LANE_INSTRUCTIONS_DROPPED = "Kanban: the lane instructions given earlier no longer apply.";
+
+/**
+ * The three halves of a notice's state, kept apart so a card change never
+ * re-sends the lanes, and neither re-sends the lane instructions.
+ */
 export interface KanbanNoticeState {
   /** The session's card: id, lane and title; `KANBAN_NO_CARD` when it has none. */
   card: string;
   /** The board's lanes: id, name and the fixed flag, in board order. */
   lanes: string;
+  /** The card's lane instructions: `laneId#hash(text)`; `KANBAN_NO_LANE_INSTRUCTIONS` when there are none. */
+  laneInstr: string;
 }
 
 /**
@@ -52,19 +63,61 @@ export function kanbanLaneSignature(lanes: KanbanLane[]): string {
   return JSON.stringify(lanes.map((lane) => lane.id));
 }
 
+/** A stable 32-bit FNV-1a hash, base36: the instruction text's half of a signature. */
+function hashText(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 /**
- * The notice for a state change. Each half speaks only for itself: a link change
- * never re-sends the lanes, and a lane change never re-sends the card. Pure: the
- * same board and card yield the same state and the same text.
+ * The lane-instructions identity of a card's position: the lane id plus a hash
+ * of its instructions, so entering an instructed lane, and editing those
+ * instructions, are each one transition — while a card move or a lane rename
+ * that leaves the text alone is not.
+ */
+export function kanbanLaneInstructionSignature(lanes: KanbanLane[], card: KanbanCard | null): string {
+  const lane = card ? lanes.find((entry) => entry.id === card.laneId) ?? null : null;
+  const text = lane?.instructions?.trim() ?? "";
+  return text ? `${lane!.id}#${hashText(text)}` : KANBAN_NO_LANE_INSTRUCTIONS;
+}
+
+/**
+ * The injection block, bounded so one lane cannot blow the context; empty when
+ * there is nothing to say. The lane's current name rides along with its id, so
+ * a renamed default lane (id `lane-deploy`, now "Review") reads right in the
+ * transcript — the id stays the stable handle the model updates with.
+ */
+export function kanbanLaneInstructionsText(lanes: KanbanLane[], card: KanbanCard | null): string {
+  const lane = card ? lanes.find((entry) => entry.id === card.laneId) ?? null : null;
+  const text = lane?.instructions?.trim() ?? "";
+  if (!text) return "";
+  const points = [...text];
+  const bounded = points.length > KANBAN_LANE_INSTRUCTIONS_MAX
+    ? `${points.slice(0, KANBAN_LANE_INSTRUCTIONS_MAX).join("")}\n…[truncated]`
+    : text;
+  const name = lane!.name.replace(/\s+/g, " ").trim() || lane!.id;
+  return `Kanban lane instructions for ${name} (${lane!.id}):\n${bounded}`;
+}
+
+/**
+ * The notice for a state change. Each half speaks only for itself: a link
+ * change never re-sends the lanes, and neither re-sends the lane instructions.
+ * The instructions are their own block, never part of the lanes line (ids
+ * only). Pure: the same board and card yield the same state and the same text.
  */
 export function kanbanCardNotice(
   lanes: KanbanLane[],
   card: KanbanCard | null,
-  options: { wasTracked?: boolean; cardChanged?: boolean; lanesChanged?: boolean } = {},
+  options: { wasTracked?: boolean; cardChanged?: boolean; lanesChanged?: boolean; laneInstrChanged?: boolean; laneInstrDropped?: boolean } = {},
 ): { state: KanbanNoticeState; content: string } {
   const state: KanbanNoticeState = {
     card: kanbanCardSignature(card),
     lanes: kanbanLaneSignature(lanes),
+    laneInstr: kanbanLaneInstructionSignature(lanes, card),
   };
   const lines: string[] = [];
   if (options.cardChanged !== false) {
@@ -75,6 +128,11 @@ export function kanbanCardNotice(
     else if (options.wasTracked) lines.push("Kanban: this session is no longer on a Kanban card.");
   }
   if (options.lanesChanged !== false) lines.push(`Kanban lanes in board order: ${kanbanBoardLanesText(lanes)}`);
+  if (options.laneInstrChanged !== false) {
+    const block = kanbanLaneInstructionsText(lanes, card);
+    if (block) lines.push(block);
+    else if (options.laneInstrDropped) lines.push(KANBAN_LANE_INSTRUCTIONS_DROPPED);
+  }
   return { state, content: lines.join("\n") };
 }
 
@@ -121,13 +179,14 @@ function priorState(ctx: ExtensionContext, memory: NoticeMemory, sessionId: stri
     if (entry.type !== "custom_message" || entry.customType !== KANBAN_CARD_NOTICE_TYPE) continue;
     const details = entry.details as Partial<KanbanNoticeState> | undefined;
     if (typeof details?.card !== "string" || typeof details.lanes !== "string") return undefined;
-    return { card: details.card, lanes: details.lanes };
+    // A notice persisted before lane instructions existed has no third half: it reads as "none".
+    return { card: details.card, lanes: details.lanes, laneInstr: typeof details.laneInstr === "string" ? details.laneInstr : KANBAN_NO_LANE_INSTRUCTIONS };
   }
   return undefined;
 }
 
 const sameState = (a: KanbanNoticeState | undefined, b: KanbanNoticeState): boolean =>
-  a !== undefined && a.card === b.card && a.lanes === b.lanes;
+  a !== undefined && a.card === b.card && a.lanes === b.lanes && a.laneInstr === b.laneInstr;
 
 /**
  * A run's card notice, or undefined when there is nothing new to say. Reads are
@@ -141,12 +200,20 @@ async function cardNoticeForRun(ctx: ExtensionContext, memory: NoticeMemory) {
   const context = contextEntries(ctx);
   const prior = priorState(ctx, memory, sessionId, context);
   const card = cardForSession(snapshot.board, sessionId) ?? null;
-  // Each half speaks for itself: a link change never re-sends the lanes, and a
-  // lane change never re-sends the card.
+  const laneInstr = kanbanLaneInstructionSignature(snapshot.board.lanes, card);
+  // Each half speaks for itself: a link change never re-sends the lanes, and
+  // neither re-sends the lane instructions.
   const notice = kanbanCardNotice(snapshot.board.lanes, card, {
     wasTracked: prior !== undefined && prior.card !== KANBAN_NO_CARD,
     cardChanged: prior === undefined || prior.card !== kanbanCardSignature(card),
     lanesChanged: prior === undefined || prior.lanes !== kanbanLaneSignature(snapshot.board.lanes),
+    laneInstrChanged: prior === undefined || prior.laneInstr !== laneInstr,
+    // The card left an instructed lane, or its instructions were cleared while
+    // the card sits there. An unlink is already the card half's own line.
+    laneInstrDropped: prior !== undefined
+      && prior.laneInstr !== KANBAN_NO_LANE_INSTRUCTIONS
+      && laneInstr === KANBAN_NO_LANE_INSTRUCTIONS
+      && card !== null,
   });
   memory.set(sessionId, { state: notice.state, seenAt: context.length });
   if (sameState(prior, notice.state)) return undefined;

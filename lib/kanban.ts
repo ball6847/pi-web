@@ -462,6 +462,10 @@ export function kanbanAddLane(projectDir: string | null, name: string, descripti
 export function kanbanRenameLane(projectDir: string | null, laneId: string, name: string): void {
   mutate(projectDir, { action: "rename-lane", laneId, name });
 }
+/** A work lane's text: the UI description and/or the model-facing instructions (empty clears). */
+export function kanbanEditLane(projectDir: string | null, laneId: string, patch: { description?: string; instructions?: string }): void {
+  mutate(projectDir, { action: "edit-lane", laneId, ...patch });
+}
 export function kanbanMoveLane(projectDir: string | null, laneId: string, direction: -1 | 1): void {
   mutate(projectDir, { action: "move-lane", laneId, direction });
 }
