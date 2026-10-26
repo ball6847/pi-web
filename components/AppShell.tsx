@@ -14,6 +14,7 @@ import { SettingsPanel, SettingsSectionIcon } from "./SettingsPanel";
 import { KanbanBoard } from "./KanbanBoard";
 import { KanbanLaneStrip } from "./KanbanLaneStrip";
 import { cardForSession, sessionlessCardsByRecency } from "@/lib/kanban-shared";
+import { kanbanSearchForJump, kanbanSearchForProject, type KanbanSearchState } from "@/lib/kanban-search";
 import {
   kanbanAdvanceCard,
   kanbanBoardSnapshot,
@@ -278,6 +279,9 @@ export function AppShell() {
   const [boardProjectDir, setBoardProjectDir] = useState<string | null>(
     () => getInitialNavigation(searchParams).boardProjectDir,
   );
+  // The board unmounts in chat. Keep only this project's query here, not in
+  // the URL, localStorage or the canonical board cache.
+  const [boardSearch, setBoardSearch] = useState<KanbanSearchState>({ projectDir: null, query: "" });
   const [boardHighlightCardId, setBoardHighlightCardId] = useState<string | null>(null);
   const boardHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [newSessionKanbanPending, setNewSessionKanbanPending] = useState<KanbanNewSessionPending>(KANBAN_OFF_PENDING);
@@ -1432,11 +1436,26 @@ export function AppShell() {
   const composerBoardDir = selectedSession === null && effectiveNewSessionCwd
     ? contextForCwd(sidebarNewSessionContext, effectiveNewSessionCwd, newSessionMoveRef.current).project?.root ?? effectiveNewSessionCwd
     : null;
+  // Promotion supplies only cwd until the catalogue hydrates projectRoot.
+  // Resolve that cwd through the same known project/worktree context as the
+  // composer, or root → transient checkout → root looks like two switches.
   const kanbanContextDir = selectedSession
-    ? selectedSession.projectRoot ?? selectedSession.cwd
+    ? selectedSession.projectRoot ?? contextForCwd(sidebarNewSessionContext, selectedSession.cwd, newSessionMoveRef.current).project.root
     : composerBoardDir;
   const contextBoard = useKanbanBoard(kanbanContextDir);
   const viewBoard = useKanbanBoard(centerView === "board" ? boardProjectDir : null);
+  useEffect(() => {
+    setBoardSearch((current) => kanbanSearchForProject(current, boardProjectDir));
+  }, [boardProjectDir]);
+  const previousKanbanContextRef = useRef(kanbanContextDir);
+  useEffect(() => {
+    const previous = previousKanbanContextRef.current;
+    previousKanbanContextRef.current = kanbanContextDir;
+    if (previous === kanbanContextDir || !kanbanContextDir) return;
+    // Opening a card's chat in the same project is not a project change.
+    setBoardSearch((current) => current.projectDir === kanbanContextDir
+      ? current : { projectDir: current.projectDir, query: "" });
+  }, [kanbanContextDir]);
   const boardTabAvailable = showChat && (kanbanContextDir !== null || centerView === "board");
   // The board view lives in the URL (`?board=<projectDir>`) so a reload comes
   // back to it. history.replaceState, not router.replace: this URL is only
@@ -1458,7 +1477,13 @@ export function AppShell() {
     }
   }, [boardProjectDir, centerView, searchParams]);
   const openKanbanBoardView = useCallback((projectDir: string | null, cardId: string | null = null) => {
-    if (projectDir) setBoardProjectDir(projectDir);
+    if (projectDir) {
+      setBoardProjectDir(projectDir);
+      const card = cardId ? kanbanBoardSnapshot(projectDir)?.cards.find((candidate) => candidate.id === cardId) ?? null : null;
+      setBoardSearch((current) => cardId
+        ? kanbanSearchForJump(current, projectDir, card)
+        : kanbanSearchForProject(current, projectDir));
+    }
     setCenterView("board");
     setBoardHighlightCardId(cardId);
     if (boardHighlightTimerRef.current) clearTimeout(boardHighlightTimerRef.current);
@@ -2947,6 +2972,9 @@ export function AppShell() {
             {centerView === "board" && boardProjectDir ? (
               <div style={{ position: "absolute", inset: 0 }}>
                 <KanbanBoard
+                  key={boardProjectDir}
+                  query={kanbanSearchForProject(boardSearch, boardProjectDir).query}
+                  onQueryChange={(query) => setBoardSearch({ projectDir: boardProjectDir, query })}
                   board={viewBoard}
                   projectDir={boardProjectDir}
                   projectName={getFileName(boardProjectDir) || boardProjectDir}
