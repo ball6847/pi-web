@@ -6,7 +6,7 @@ reviewedAt: "2026-10-26T03:40:05Z"
 
 Created: 2026-10-26
 Target: `feat-harness-tool` → `origin/kanban`
-Status: implementing
+Status: implemented (review APPROVE; PR open)
 
 ## Agreed scope
 One tool, `kanban`, with `read`, `create`, and `update`. Board identity comes from the executing session's cwd (worktrees share their project board). A task is an existing card and status is its lane. Keep one linked card per session. Independent tasks are created in Backlog and delegated via the existing Agent prompt carrying cardId; no new dispatch API or automatic continuation.
@@ -24,7 +24,7 @@ One tool, `kanban`, with `read`, `create`, and `update`. Board identity comes fr
 2. Runtime: register extension for normal non-chat sessions; add it to non-chat subagents' resolved active tools and persisted snapshot; restore only when snapshot tools include kanban. Read-only subagent determination comes from the profile/snapshot built-in tool set, not the host kanban tool. Cover spawn, reload, resume/reopen, restricted and Chat-only profiles. **Unit implementedAt: 2026-10-26T03:33:21Z** ([runtime report](../reports/kanban-tool-runtime.md)); overall plan remains in progress.
 3. UI: include subagent sessions for board link lookup/opening. Prefer read-only subagent viewer on card open; do not launch a run by viewing. Keep manual linking choices top-level if possible. Make sidebar marker use own card before root fallback.
    - implementedAt: 2026-10-26T03:32:48Z — [UI report](../reports/kanban-tool-ui.md). Family-only sidebar rows already read their own root card; no redundant fallback added (per clarified scope).
-4. Verification: domain concurrency/refusal/partial/no-op tests, real SDK extension/runtime tests, component tests, typecheck/lint/full suite. Smoke with isolated fixtures; actual tool calls mutate board, revision poll reflects changes, child card opens transcript, desktop and mobile screenshots captured AND read.
+4. Verification: domain concurrency/refusal/partial/no-op tests, real SDK extension/runtime tests, component tests, typecheck/lint/full suite. Smoke with isolated fixtures; actual tool calls mutate board, revision poll reflects changes, child card opens transcript, desktop and mobile screenshots captured AND read. **implementedAt: 2026-10-26T03:52:00Z** ([verification report](../reports/kanban-tool-verification.md))
 5. Review, fix actionable findings, commit/push and open PR targeting `kanban`. PR records exact tests, screenshot evidence and limitations.
 
 ## Required cases

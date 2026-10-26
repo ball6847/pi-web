@@ -42,6 +42,11 @@ Full-suite/smoke runs unset `KIMI_API_KEY` and `XIAOMI_TOKEN_PLAN_SGP_API_KEY`. 
 
 ## Remaining acceptance gate
 
-**No desktop/mobile screenshots were captured or read.** Chrome remote debugging is disabled, as reported by the user and [verification report](kanban-tool-verification.md). The API smoke does not prove live browser polling or the actual child-card click/viewer flow. Complete those checks using the smoke’s `--serve` fixture, or explicitly waive the gate before marking unit 4 complete. This is a verification limitation, not a fabricated code defect.
+**Gate now satisfied after the review** (screenshots captured and read through Playwright's Chromium against the same `--serve` fixture; see the follow-up below and the [verification report](kanban-tool-verification.md)). The finding as filed read: **No desktop/mobile screenshots were captured or read.** Chrome remote debugging is disabled, as reported by the user and [verification report](kanban-tool-verification.md). The API smoke does not prove live browser polling or the actual child-card click/viewer flow. Complete those checks using the smoke’s `--serve` fixture, or explicitly waive the gate before marking unit 4 complete. This is a verification limitation, not a fabricated code defect.
 
 Builder reports: [domain/store](kanban-tool-domain.md), [runtime](kanban-tool-runtime.md), [UI](kanban-tool-ui.md), [verification](kanban-tool-verification.md). Their documented SDK structured-output behavior and sidebar scope adjustment are justified by the code and tests.
+
+## Follow-up after this review (parent, not the reviewer)
+
+- The screenshot gate was closed without the browser harness: `browser_setup` still refuses (Chrome remote debugging pipe off), so Playwright's Chromium drove the `--serve` smoke fixture instead. Five screenshots were captured and read: Backlog before delegation, the same page after the subagent moved the card to Done with no reload, the child card's menu, the read-only child transcript viewer opened from its chip, and the phone board at 390×844. Evidence: [screenshots](screenshots/kanban-agent-tool/), [verification report](kanban-tool-verification.md).
+- No code changed after the review: everything below still applies to the reviewed diff.

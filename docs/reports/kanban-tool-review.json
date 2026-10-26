@@ -68,7 +68,7 @@
     "verdict": "approve",
     "confidence": 0.9,
     "overall_score": 10.0,
-    "one_liner": "No concrete code defects found; automated checks and real Next/Pi smoke pass. Plan verification remains incomplete pending browser polling/viewer checks and desktop/mobile screenshots.",
+    "one_liner": "No concrete code defects found; automated checks and the real Next/Pi smoke pass. The browser gate this review left open was closed afterwards with five captured-and-read screenshots (see the Markdown follow-up).",
     "stats": {
       "files_reviewed": 31,
       "lines_added": 2178,
@@ -129,6 +129,13 @@
   ],
   "metadata": {
     "schema_version": "1.0.0",
-    "generator": "expert-code-review"
+    "generator": "expert-code-review",
+    "postReview": {
+      "by": "parent",
+      "planVerification": "complete",
+      "screenshots": "docs/reports/screenshots/kanban-agent-tool/ (5 captured and read via Playwright Chromium against the e2e --serve fixture)",
+      "codeChangedAfterReview": false,
+      "note": "browser_setup still refuses because Chrome remote debugging is off; screenshots were taken with Playwright instead."
+    }
   }
 }

@@ -27,10 +27,18 @@ A deterministic local Pi faux provider issues real tool calls through the produc
 
 Fixture data and the smoke server are removed on exit. Logs/results are ignored local artifacts. Reproduce with `node e2e/kanban-agent-smoke.mjs`; run `--serve` to keep the fixture open before delegation for browser inspection.
 
-## Visual verification — not completed
+## Visual verification — completed
 
-`browser_setup` repeatedly refused the connection because Chrome remote debugging is disabled. The tool's required action is to enable it at `chrome://inspect/#remote-debugging`. No other browser/profile was launched or controlled to bypass that boundary.
+The browser harness (`browser_setup`) refused: Chrome's remote debugging pipe is off. Rather than waiving the gate, the check ran through Playwright's Chromium against the same `--serve` fixture. Screenshots were captured **and read** (each inspected as an image).
 
-**No screenshots were captured or read.** Therefore desktop/mobile rendered layout, live browser revision polling, and clicking the child card into its read-only viewer are not claimed as visually verified. Unit/component tests cover the corresponding projection, callbacks, link preservation and viewer-only API behavior, but do not substitute for screenshot inspection.
+| Evidence | Observed |
+| --- | --- |
+| [1 — Backlog before](../reports/screenshots/kanban-agent-tool/1-backlog-before-delegation.png) | Lanes Backlog/Todo/Plan/Implement/Deploy/Done in board order; “Fix unrelated flaky test” in **Backlog** with “No session”; “Ship minimal Kanban tools” in **Plan** carrying its own session chip; sidebar marked “2 tasks”. |
+| [2 — Done after the subagent](../reports/screenshots/kanban-agent-tool/2-done-after-subagent.png) | Same page, **no reload**: the card is now in **Done** with the done mark, its description reads “Regression test added. Verification passed…”, and its chip is the child session “Fix the unrelated flaky test”. The parent card is untouched in Plan, still linked to the parent session. Backlog returns to 0. |
+| [3 — Child card menu](../reports/screenshots/kanban-agent-tool/3-child-card-menu.png) | The child card's actions offer “Open session”, “Unlink from session”, Edit, Move entries and Delete — a child-linked card behaves like any linked card. |
+| [4 — Child transcript viewer](../reports/screenshots/kanban-agent-tool/4-child-transcript-viewer.png) | “Open session” opens the read-only side panel (header Completed) listing the child's real `kanban read` / three `kanban update` calls and “Delegated card verified and completed.” The URL and the Chat tab are unchanged, the board stays visible, and nothing started a run. |
+| [5 — Phone board](../reports/screenshots/kanban-agent-tool/5-phone-board.png) | 390×844: lane strip with counts (Done 1 visible), the one-lane board showing Plan's card and its linked session chip; no layout overflow. |
 
-Once Chrome is enabled: run the smoke script with `--serve`, open `boardUrl` in `test-results/kanban-agent-smoke/fixture.json`, POST its `delegateCommand` to `base + delegatePath`, observe Backlog → Done without a reload, open the child chip, and capture/read screenshots at desktop and phone widths.
+Live revision polling is confirmed: the DOM moved the card from Backlog to Done while the page stayed open, driven only by the child's tool calls. Console: no errors at either width. The delegation path was the PR's documented one — `POST /api/agent/<parent>` with the parent's prompt, the real `Agent` tool spawning the fixture child, whose real `kanban` calls did the work.
+
+Reproduce: `node e2e/kanban-agent-smoke.mjs --serve`, then open `boardUrl` from `test-results/kanban-agent-smoke/fixture.json`, `POST` its `delegateCommand` to `base + delegatePath`, and watch the card reach Done without reloading.
