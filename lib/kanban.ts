@@ -565,6 +565,20 @@ export function kanbanBoardSnapshot(projectDir: string): KanbanBoard | null {
 }
 
 /**
+ * Take a board the server already wrote (a fresh composer's card, linked by the
+ * prompt route *before* the first run) instead of posting the same link again:
+ * the cache shows it at once, and the next poll sees the revision it already has.
+ */
+export function kanbanAdoptServerBoard(projectDir: string, board: KanbanBoard, revision: number): void {
+  const entry = entries.get(projectDir);
+  if (!entry) return;
+  entry.loadId += 1;
+  adopt(entry, { board, revision });
+  clearError(entry);
+  publish(entry);
+}
+
+/**
  * `adopt` keeps the old object when a refetch's JSON is identical, so a
  * snapshot's reference is stable across an unchanged poll — export the read
  * under the tests' name too, so node tests can pin that rule (the store's

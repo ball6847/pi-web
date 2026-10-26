@@ -14,7 +14,7 @@ import type {
 } from "@/lib/types";
 import { isBlockingExtensionUiRequest } from "@/lib/browser-notifications";
 import { normalizeToolCalls } from "@/lib/normalize";
-import { agentStatusUrl, isPromptRejectedError, sendAgentCommand } from "@/lib/agent-client";
+import { agentStatusUrl, isPromptRejectedError, sendAgentCommand, sendAgentCommandResponse } from "@/lib/agent-client";
 import {
   deleteSessionViewSnapshot,
   getSessionViewSnapshot,
@@ -25,6 +25,7 @@ import { clearDraft, getDraft, rekeyDraft, restoreDraftSubmission } from "@/lib/
 import { getPreferredToolPreset, setPreferredToolPreset } from "@/lib/tool-preset-preference";
 import { CONFIGURED_TOOL_PRESET, getPresetFromToolNames, getToolNamesForPreset, type ToolEntry, type ToolPreset } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
+import type { KanbanAttachOutcome, KanbanNewSessionPick } from "@/lib/kanban-types";
 import { mergeSessionStats, type SessionFileStats } from "@/lib/session-stats";
 import { userMessageKey } from "@/lib/prompt-recovery";
 import { carryMessageKeys, messageRenderKeys } from "@/lib/message-keys";
@@ -187,12 +188,20 @@ export interface UseAgentSessionOptions {
   sessionRunning?: boolean;
   newSessionCwd: string | null;
   newSessionDraftKey: string | null;
+  /**
+   * The fresh composer's "Track on board" choice. It rides the first prompt, so
+   * the route can link the card *before* pi starts the run: the run's own board
+   * notice then already names the card (a link applied afterwards reaches the
+   * model one turn late).
+   */
+  newSessionKanbanPick?: KanbanNewSessionPick | null;
   /** A run ended; `aborted` when it was stopped rather than finished (pi's `agent_settled.aborted`). */
   onAgentEnd?: (end: AgentEndInfo) => void;
   /** A top-level tool call finished; the files it touched may have changed. */
   onToolEnd?: (toolName: string) => void;
   onAttentionNeeded?: (request: BlockingExtensionUiRequest) => void;
-  onSessionCreated?: (session: SessionInfo, sourceDraftKey: string) => void;
+  /** `kanban` is the board write the prompt route already made for this fresh session, if any. */
+  onSessionCreated?: (session: SessionInfo, sourceDraftKey: string, kanban?: KanbanAttachOutcome) => void;
   onSessionForked?: (newSessionId: string) => void;
   modelsRefreshKey?: number;
   chatInputRef?: React.RefObject<ChatInputHandle | null>;
@@ -359,7 +368,7 @@ type SlashCommandsResponse = {
 
 export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
-    session, newSessionCwd, newSessionDraftKey, onAgentEnd, onToolEnd, onAttentionNeeded, onSessionCreated, onSessionForked,
+    session, newSessionCwd, newSessionDraftKey, newSessionKanbanPick, onAgentEnd, onToolEnd, onAttentionNeeded, onSessionCreated, onSessionForked,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
     onOpenSettings,
   } = opts;
@@ -900,6 +909,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [onSystemToolsChange, setToolPresetState]);
 
+  /** What the prompt route wrote on the board for this fresh session (the composer's pick). */
+  const kanbanAttachRef = useRef<KanbanAttachOutcome | undefined>(undefined);
+
   const promoteNewSession = useCallback((messageCount = 0, firstMessage = "(no messages)") => {
     const sid = sessionIdRef.current;
     if (!isNew || !newSessionCwd || !sid || newSessionPromotedRef.current) return;
@@ -922,7 +934,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       messageCount,
       firstMessage,
       transient: true,
-    }, provisionalDraftKey);
+    }, provisionalDraftKey, kanbanAttachRef.current);
   }, [isNew, newSessionCwd, newSessionDraftKey, onSessionCreated, opts.chatInputRef]);
 
   const ensureNewSession = useCallback(async () => {
@@ -1897,11 +1909,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           });
         }
         promptRequestStarted = true;
-        await sendAgentCommand(sid, {
+        const kanbanPick = newSessionKanbanPick && newSessionKanbanPick.kind !== "off"
+          ? (newSessionKanbanPick.kind === "attach"
+            ? { cardId: newSessionKanbanPick.cardId }
+            : { laneId: newSessionKanbanPick.laneId })
+          : undefined;
+        const prompt = await sendAgentCommandResponse(sid, {
           type: "prompt",
           message,
           ...(piImages?.length ? { images: piImages } : {}),
+          ...(kanbanPick ? { kanban: kanbanPick } : {}),
         });
+        kanbanAttachRef.current = prompt.kanban;
         promoteNewSession(1, message);
       } else if (session) {
         sentSessionId = session.id;
@@ -1951,7 +1970,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setAgentPhase(null);
       dispatch({ type: "end" });
     }
-  }, [isNew, newSessionCwd, newSessionModel, session, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, cancelEventStreamGrace, closeEvents, composerDraftKey, dispatch, reconcileAgentState, restoreSubmission, editEntryId, setEdit]);
+  }, [isNew, newSessionCwd, newSessionModel, newSessionKanbanPick, session, ensureNewSession, ensureEventsConnected, promoteNewSession, waitForPromptSettlement, addNotice, cancelEventStreamGrace, closeEvents, composerDraftKey, dispatch, reconcileAgentState, restoreSubmission, editEntryId, setEdit]);
 
   const executeBash = useCallback(async (command: string, excludeFromContext: boolean) => {
     if (agentRunningRef.current || bashRunningRef.current) return;

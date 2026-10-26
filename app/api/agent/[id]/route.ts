@@ -1,6 +1,51 @@
 import { NextResponse } from "next/server";
 import { resolveSessionPath } from "@/lib/session-reader";
 import { startRpcSession, getRpcSession, setRpcSessionTools } from "@/lib/rpc-manager";
+import { attachNewSessionCard } from "@/lib/kanban-store";
+import type { KanbanAttachOutcome } from "@/lib/kanban-types";
+import type { KanbanSessionCardPick } from "@/lib/kanban-shared";
+
+/** The board's own title for a session: its first message, as the composer shows it. */
+const SESSION_TITLE_MAX = 200;
+
+function parseKanbanPick(value: unknown): KanbanSessionCardPick | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("kanban must be an object with cardId or laneId");
+  }
+  const raw = value as Record<string, unknown>;
+  for (const key of Object.keys(raw)) {
+    if (key !== "cardId" && key !== "laneId") throw new Error(`kanban: unknown field "${key}"`);
+  }
+  const cardId = typeof raw.cardId === "string" && raw.cardId.trim() ? raw.cardId : null;
+  const laneId = typeof raw.laneId === "string" && raw.laneId.trim() ? raw.laneId : null;
+  if ((cardId === null) === (laneId === null)) throw new Error("kanban needs exactly one of cardId or laneId");
+  return cardId !== null ? { cardId } : { laneId: laneId as string };
+}
+
+function firstMessageTitle(message: unknown, fallback: string): string {
+  const text = typeof message === "string" ? message.trim() : "";
+  if (!text) return fallback;
+  return text.length > SESSION_TITLE_MAX ? `${text.slice(0, SESSION_TITLE_MAX)}…` : text;
+}
+
+/**
+ * The card a fresh composer's pick attaches, written **before** the prompt goes
+ * out: pi runs `before_agent_start` (and so the board notice) while handling the
+ * prompt, so a link applied afterwards — what the browser used to do once it
+ * learned the session id — always reached the model one turn late. Best effort:
+ * a board refusal is reported in the answer and never fails the prompt.
+ */
+async function attachPickedCard(cwd: string, sessionId: string, title: string, pick: KanbanSessionCardPick): Promise<KanbanAttachOutcome> {
+  try {
+    const attached = await attachNewSessionCard(cwd, { sessionId, sessionTitle: title }, pick);
+    return attached.ok
+      ? { ok: true, board: attached.board, revision: attached.revision }
+      : { ok: false, error: attached.error, code: attached.code };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
 
 // POST /api/agent/[id] - Send a command to an existing session
 export async function POST(
@@ -14,6 +59,10 @@ export async function POST(
   try {
     const body = await req.json() as { type: string; [key: string]: unknown };
     commandType = typeof body.type === "string" ? body.type : undefined;
+    // A composer's first prompt carries its "Track on board" pick. It belongs to
+    // this route, not to pi's command handler.
+    const kanbanPick = commandType === "prompt" ? parseKanbanPick(body.kanban) : undefined;
+    delete body.kanban;
     const requestedToolNames = body.toolNames;
     if (
       requestedToolNames !== undefined
@@ -37,9 +86,12 @@ export async function POST(
       });
     }
     if (existing?.isAlive()) {
+      const kanban = kanbanPick
+        ? await attachPickedCard(existing.cwd, id, firstMessageTitle(body.message, id), kanbanPick)
+        : undefined;
       const result = await existing.send(body);
       promptAccepted = body.type === "prompt";
-      return NextResponse.json({ success: true, data: result });
+      return NextResponse.json({ success: true, data: result, ...(kanban ? { kanban } : {}) });
     }
 
     const filePath = await resolveSessionPath(id);
@@ -55,10 +107,13 @@ export async function POST(
     const { session } = await startRpcSession(id, filePath, undefined, {
       ...(toolNames !== undefined ? { toolNames } : {}),
     });
+    const kanban = kanbanPick
+      ? await attachPickedCard(session.cwd, id, firstMessageTitle(body.message, id), kanbanPick)
+      : undefined;
     const result = await session.send(body);
     promptAccepted = body.type === "prompt";
 
-    return NextResponse.json({ success: true, data: result });
+    return NextResponse.json({ success: true, data: result, ...(kanban ? { kanban } : {}) });
   } catch (error) {
     return NextResponse.json({
       error: error instanceof Error ? error.message : String(error),

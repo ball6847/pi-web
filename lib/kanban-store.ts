@@ -18,7 +18,7 @@ import {
   writeBoardRows,
   type KanbanSnapshot,
 } from "./kanban-data";
-import { applyKanbanAction, pruneDeadLinks } from "./kanban-shared";
+import { applyKanbanAction, attachSessionCard, pruneDeadLinks, type KanbanSessionCardPick } from "./kanban-shared";
 import {
   applyKanbanToolMutation, kanbanToolMutationResult, kanbanToolOverview, kanbanToolRead, kanbanToolSearch, parseKanbanToolRequest,
   type KanbanToolActor, type KanbanToolResult,
@@ -185,9 +185,25 @@ function linkedSessionIds(board: KanbanBoard): string[] {
 }
 
 /** The board's linked sessions that still exist for this project. */
+/**
+ * Sessions the prompt route attached before their session file existed. pi
+ * writes that file with the first message, so a pruning read landing in the gap
+ * would read the fresh link as dead and unlink it — the "my card didn't attach"
+ * report, with a window instead of a cause. A few seconds of grace covers it.
+ */
+const freshAttachments = new Map<string, number>();
+const FRESH_ATTACHMENT_MS = 15_000;
+
+function recentlyAttached(sessionId: string, now = Date.now()): boolean {
+  for (const [id, at] of freshAttachments) {
+    if (now - at > FRESH_ATTACHMENT_MS) freshAttachments.delete(id);
+  }
+  return freshAttachments.has(sessionId);
+}
+
 async function aliveSessions(cwd: string, board: KanbanBoard): Promise<Set<string>> {
   const ids = linkedSessionIds(board);
-  const checks = await Promise.all(ids.map(async (id) => ((await validateSession(cwd, id)) ? id : null)));
+  const checks = await Promise.all(ids.map(async (id) => ((await validateSession(cwd, id)) || recentlyAttached(id)) ? id : null));
   return new Set(checks.filter((id): id is string => id !== null));
 }
 
@@ -675,6 +691,36 @@ export async function executeKanbanToolRequest(
       return { board: next.board };
     }, { signal, materializeRefused: false });
     return edited.ok ? kanbanToolMutationResult(edited.board, edited.revision, actor.sessionId, cardId, request.action) : edited;
+  } catch (error) {
+    return toFailure(error);
+  }
+}
+
+/**
+ * The card a brand-new session starts on: the prompt route calls this **before**
+ * it sends the prompt, so the run's first board notice already names the card.
+ * The session's file does not exist yet (pi writes it with the first message),
+ * so this is the one write that trusts its caller's session id instead of the
+ * session catalogue — and the one write that must not prune: `pruneDeadLinks`
+ * would unlink the very session this call is attaching.
+ */
+export async function attachNewSessionCard(
+  cwd: string,
+  session: { sessionId: string; sessionTitle: string },
+  pick: KanbanSessionCardPick,
+): Promise<KanbanBoardResult> {
+  const valid = await validateKanbanCwd(cwd);
+  if (!valid.ok) return valid;
+  const projectRoot = await boardProjectRoot(valid.cwd);
+  try {
+    return await editBoard(projectRoot, async (board, now) => {
+      const next = attachSessionCard(board, session.sessionId, session.sessionTitle, pick, now);
+      if (!next) {
+        return failure("refused", "That card cannot be attached to this session. Pick a card this session may own, in a work lane.");
+      }
+      freshAttachments.set(session.sessionId, Date.now());
+      return { board: next };
+    }, { materializeRefused: false });
   } catch (error) {
     return toFailure(error);
   }
