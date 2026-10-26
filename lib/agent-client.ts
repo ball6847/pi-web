@@ -1,3 +1,5 @@
+import type { KanbanAttachOutcome } from "./kanban-types";
+
 // Client-side helper for POST /api/agent/[id].
 //
 // Every /api/agent/[id] route returns one of:
@@ -35,10 +37,24 @@ export function agentStatusUrl(sessionId: string): string {
   return `/api/agent/${encodeURIComponent(sessionId)}?systemPrompt=0`;
 }
 
+/** The whole answer of `POST /api/agent/[id]`, for commands that report back besides `data`. */
+export interface AgentCommandResponse<T = unknown> {
+  data: T;
+  /** What the route did with a composer's "Track on board" pick, when it carried one. */
+  kanban?: KanbanAttachOutcome;
+}
+
 export async function sendAgentCommand<T = unknown>(
   sessionId: string,
   command: Record<string, unknown>,
 ): Promise<T> {
+  return (await sendAgentCommandResponse<T>(sessionId, command)).data;
+}
+
+export async function sendAgentCommandResponse<T = unknown>(
+  sessionId: string,
+  command: Record<string, unknown>,
+): Promise<AgentCommandResponse<T>> {
   const res = await fetch(`/api/agent/${encodeURIComponent(sessionId)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -47,6 +63,7 @@ export async function sendAgentCommand<T = unknown>(
   const body = (await res.json().catch(() => ({}))) as {
     success?: boolean;
     data?: T;
+    kanban?: KanbanAttachOutcome;
     error?: string;
     code?: string;
     accepted?: boolean;
@@ -59,5 +76,5 @@ export async function sendAgentCommand<T = unknown>(
       body.accepted,
     );
   }
-  return body.data as T;
+  return { data: body.data as T, ...(body.kanban ? { kanban: body.kanban } : {}) };
 }
