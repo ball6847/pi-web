@@ -85,7 +85,12 @@ export function kanbanLaneInstructionSignature(lanes: KanbanLane[], card: Kanban
   return text ? `${lane!.id}#${hashText(text)}` : KANBAN_NO_LANE_INSTRUCTIONS;
 }
 
-/** The injection block, bounded so one lane cannot blow the context; empty when there is nothing to say. */
+/**
+ * The injection block, bounded so one lane cannot blow the context; empty when
+ * there is nothing to say. The lane's current name rides along with its id, so
+ * a renamed default lane (id `lane-deploy`, now "Review") reads right in the
+ * transcript — the id stays the stable handle the model updates with.
+ */
 export function kanbanLaneInstructionsText(lanes: KanbanLane[], card: KanbanCard | null): string {
   const lane = card ? lanes.find((entry) => entry.id === card.laneId) ?? null : null;
   const text = lane?.instructions?.trim() ?? "";
@@ -94,7 +99,8 @@ export function kanbanLaneInstructionsText(lanes: KanbanLane[], card: KanbanCard
   const bounded = points.length > KANBAN_LANE_INSTRUCTIONS_MAX
     ? `${points.slice(0, KANBAN_LANE_INSTRUCTIONS_MAX).join("")}\n…[truncated]`
     : text;
-  return `Kanban lane instructions (${lane!.id}):\n${bounded}`;
+  const name = lane!.name.replace(/\s+/g, " ").trim() || lane!.id;
+  return `Kanban lane instructions for ${name} (${lane!.id}):\n${bounded}`;
 }
 
 /**
