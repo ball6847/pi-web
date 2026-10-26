@@ -30,7 +30,7 @@ test("a work lane holds an instructions textarea seeded with its saved text", ()
   const textarea = textareaOf(html);
   assert.ok(textarea, "the textarea renders");
   assert.match(textarea, /data-kanban-lane-instructions="lane-implement"/);
-  assert.match(textarea, /maxLength="2000"|maxlength="2000"/i);
+  assert.match(textarea, new RegExp(`maxlength="${KANBAN_LANE_INSTRUCTIONS_MAX}"`, "i"));
   assert.match(textarea, />Run the suite before done\.<\/textarea>/, "the saved text is the value");
   assert.match(textarea, /injected when a card enters this lane/, "the placeholder says it is model-facing");
 });
