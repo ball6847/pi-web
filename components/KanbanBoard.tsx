@@ -31,6 +31,7 @@ import {
 import { cardsOfLane, canRestInLane } from "@/lib/kanban-shared";
 import { kanbanDescriptionExcerpt, normalizeKanbanQuery, searchKanbanBoard } from "@/lib/kanban-search";
 import { KanbanSearchField, KanbanSearchStyles, KanbanSearchText } from "./KanbanSearch";
+import { kanbanSessionOptions, type KanbanSessionOption as SessionOption } from "@/lib/kanban-sessions";
 import {
   kanbanAddCard,
   kanbanAddLane,
@@ -55,7 +56,7 @@ export interface KanbanBoardProps {
   /** Page-memory query owned above the board/chat unmount, never in the board cache. */
   query: string;
   onQueryChange(query: string): void;
-  /** The project's top-level pi sessions, for the link pickers and "Open session". */
+  /** All the project's sessions for existence/open lookup; manual links stay top-level. */
   sessions: SessionInfo[];
   runningSessionIds: Set<string>;
   /**
@@ -410,12 +411,6 @@ export function CardMenu({
 }
 
 // -- session picker (portal) ---------------------------------------------------
-
-interface SessionOption {
-  id: string;
-  title: string;
-  running: boolean;
-}
 
 function SessionPicker({
   anchor,
@@ -807,10 +802,14 @@ function CardForm({
   onDone(): void;
 }) {
   const { t } = useI18n();
+  const sessionOptions = useMemo(
+    () => kanbanSessionOptions(sessions, runningIds, initial),
+    [sessions, runningIds, initial],
+  );
   const [title, setTitle] = useState(initial?.title ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [session, setSession] = useState<SessionOption | null>(
-    initial?.sessionId ? { id: initial.sessionId, title: initial.sessionTitle ?? "", running: false } : null,
+    () => sessionOptions.find((option) => option.id === initial?.sessionId) ?? null,
   );
   const [pickerAnchor, setPickerAnchor] = useState<DOMRect | null>(null);
   const formRef = useRef<HTMLDivElement | null>(null);
@@ -869,11 +868,6 @@ function CardForm({
     }
     onDone();
   };
-  const sessionOptions = useMemo(
-    () => sessions.map((s) => ({ id: s.id, title: s.name || s.firstMessage || s.id, running: runningIds.has(s.id) })),
-    [sessions, runningIds],
-  );
-
   return (
     <div
       ref={formRef}
@@ -966,7 +960,7 @@ function CardForm({
               onClose={() => setPickerAnchor(null)}
             />
           )}
-          {sessions.length === 0 && <div style={{ marginTop: 4, fontSize: 10.5, color: "var(--text-dim)" }}>{t("kanban.cardFormSessionRequired")}</div>}
+          {sessionOptions.length === 0 && <div style={{ marginTop: 4, fontSize: 10.5, color: "var(--text-dim)" }}>{t("kanban.cardFormSessionRequired")}</div>}
         </div>
       )}
       <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
@@ -1793,7 +1787,7 @@ export function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardDa
     if (activeMobileLane) shownLaneRef.current = activeMobileLane;
   }, [activeMobileLane]);
   const sessionOptions = useMemo(
-    () => sessions.map((s) => ({ id: s.id, title: s.name || s.firstMessage || s.id, running: runningSessionIds.has(s.id) })),
+    () => kanbanSessionOptions(sessions, runningSessionIds),
     [sessions, runningSessionIds],
   );
 

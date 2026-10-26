@@ -15,6 +15,7 @@ import { KanbanBoard } from "./KanbanBoard";
 import { KanbanLaneStrip } from "./KanbanLaneStrip";
 import { cardForSession, sessionlessCardsByRecency } from "@/lib/kanban-shared";
 import { kanbanSearchForJump, kanbanSearchForProject, type KanbanSearchState } from "@/lib/kanban-search";
+import { sessionsForKanbanBoard } from "@/lib/kanban-sessions";
 import {
   kanbanAdvanceCard,
   kanbanBoardSnapshot,
@@ -1551,11 +1552,21 @@ export function AppShell() {
 
   const sessionBoardCard = selectedSession && contextBoard ? cardForSession(contextBoard, selectedSession.id) : null;
   const boardSessions = useMemo(
-    () => boardProjectDir
-      ? sessionsWithSelection.filter((session) => session.relation?.kind !== "subagent" && (session.projectRoot ?? session.cwd) === boardProjectDir)
-      : [],
+    () => sessionsForKanbanBoard(sessionsWithSelection, boardProjectDir),
     [boardProjectDir, sessionsWithSelection],
   );
+  const handleKanbanOpenSession = useCallback((sessionId: string, title: string) => {
+    const target = boardSessions.find((session) => session.id === sessionId);
+    if (!target) return;
+    if (target.relation?.kind === "subagent") {
+      // Viewing never selects/reopens the child. Keep the chat workspace too:
+      // a different project's board must not trigger changeFileWorkspace(),
+      // which drops agent tabs. The viewer reads the child by id alone.
+      handleOpenSubagentTab(target.id, target.name || target.firstMessage || title);
+    } else {
+      handleSelectSession(target);
+    }
+  }, [boardSessions, handleOpenSubagentTab, handleSelectSession]);
   const kanbanStrip = (
     <KanbanLaneStrip
       board={contextBoard}
@@ -2983,10 +2994,7 @@ export function AppShell() {
                   awaitingInputSessionIds={awaitingInputSessionIds}
                   unreadSessionIds={unreadSessionIds}
                   highlightCardId={boardHighlightCardId}
-                  onOpenSession={(sessionId) => {
-                    const target = sessionsWithSelection.find((session) => session.id === sessionId);
-                    if (target) handleSelectSession(target);
-                  }}
+                  onOpenSession={handleKanbanOpenSession}
                   onStartSession={handleKanbanStartSession}
                 />
               </div>
