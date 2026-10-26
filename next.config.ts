@@ -55,7 +55,10 @@ const nextConfig: NextConfig = {
   ],
   // Next 16 blocks cross-origin access to dev resources by default. Allow the
   // loopback and the RFC1918 LAN ranges so the dev server stays reachable
-  // from other machines on the same LAN.
+  // from other machines on the same LAN, plus whatever extra origins the
+  // machine's own setup needs (a Tailscale MagicDNS name and its 100.64.0.0/10
+  // address, for instance) as a comma-separated PI_WEB_DEV_ORIGINS in
+  // `.env.local` — machine config, kept out of git.
   allowedDevOrigins: [
     "127.0.0.1",
     "10.*.*.*",
@@ -77,6 +80,10 @@ const nextConfig: NextConfig = {
     "172.30.*.*",
     "172.31.*.*",
     "192.168.*.*",
+    ...(process.env.PI_WEB_DEV_ORIGINS ?? "")
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean),
   ],
   async headers() {
     return [

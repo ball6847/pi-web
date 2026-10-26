@@ -32,11 +32,13 @@ import { cardsOfLane, canRestInLane } from "@/lib/kanban-shared";
 import { kanbanDescriptionExcerpt, normalizeKanbanQuery, searchKanbanBoard } from "@/lib/kanban-search";
 import { KanbanSearchField, KanbanSearchStyles, KanbanSearchText } from "./KanbanSearch";
 import { kanbanSessionOptions, type KanbanSessionOption as SessionOption } from "@/lib/kanban-sessions";
+import { KANBAN_LANE_INSTRUCTIONS_MAX } from "@/lib/kanban-tool-limits";
 import {
   kanbanAddCard,
   kanbanAddLane,
   kanbanDeleteCard,
   kanbanDeleteLane,
+  kanbanEditLane,
   kanbanLinkCard,
   kanbanMoveCard,
   kanbanMoveLane,
@@ -1452,6 +1454,7 @@ function LaneConfig({
                 onMoveUp={() => kanbanMoveLane(projectDir, lane.id, -1)}
                 onMoveDown={() => kanbanMoveLane(projectDir, lane.id, 1)}
                 onRename={(name) => kanbanRenameLane(projectDir, lane.id, name)}
+                onEditInstructions={(instructions) => kanbanEditLane(projectDir, lane.id, { instructions })}
                 onDelete={() => kanbanDeleteLane(projectDir, lane.id)}
               />
             </Fragment>
@@ -1525,6 +1528,7 @@ export function ConfigLaneRow({
   onMoveUp,
   onMoveDown,
   onRename,
+  onEditInstructions,
   onDelete,
 }: {
   lane: KanbanLane;
@@ -1536,20 +1540,28 @@ export function ConfigLaneRow({
   onMoveUp(): void;
   onMoveDown(): void;
   onRename(name: string): void;
+  /** Saves the lane's model-facing instructions (empty clears). */
+  onEditInstructions(instructions: string): void;
   onDelete(): void;
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState(lane.name);
+  const [instructions, setInstructions] = useState(lane.instructions ?? "");
   const removable = !lane.fixed && count === 0;
   const upDisabled = index === 0 || lane.fixed;
+  const saveInstructions = () => {
+    const current = lane.instructions ?? "";
+    if (instructions.trim() !== current.trim()) onEditInstructions(instructions.trim());
+    else if (instructions !== current) setInstructions(current);
+  };
 
   return (
     <div
       data-kanban-config-row={lane.id}
       style={{
         display: "flex",
-        alignItems: "center",
-        gap: 6,
+        flexDirection: "column",
+        gap: 4,
         padding: "4px 8px",
         border: "1px solid var(--border)",
         borderRadius: 8,
@@ -1558,6 +1570,7 @@ export function ConfigLaneRow({
         transition: "opacity 0.12s",
       }}
     >
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
       {lane.fixed ? (
         <span style={{ flexShrink: 0, width: 14, display: "grid", placeItems: "center", color: "var(--text-dim)" }} aria-hidden="true">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -1640,6 +1653,41 @@ export function ConfigLaneRow({
           </svg>
         }
       />
+      </div>
+      {!lane.fixed && (
+        <textarea
+          value={instructions}
+          onChange={(event) => setInstructions(event.target.value)}
+          onBlur={saveInstructions}
+          onKeyDown={(event) => {
+            // Enter keeps the newline; Ctrl/Cmd+Enter saves, as the name field's Enter does.
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              (event.target as HTMLTextAreaElement).blur();
+            }
+          }}
+          maxLength={KANBAN_LANE_INSTRUCTIONS_MAX}
+          rows={2}
+          placeholder={t("kanban.configureInstructionsPlaceholder")}
+          aria-label={`${t("kanban.configureInstructionsPlaceholder")} — ${lane.name}`}
+          data-kanban-lane-instructions={lane.id}
+          style={{
+            margin: "0 2px 2px 34px",
+            width: "calc(100% - 36px)",
+            minHeight: 38,
+            resize: "vertical",
+            padding: "5px 8px",
+            fontSize: 11.5,
+            lineHeight: 1.5,
+            fontFamily: "inherit",
+            color: "var(--text-muted)",
+            background: "var(--bg-panel)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            outline: "none",
+          }}
+        />
+      )}
     </div>
   );
 }
