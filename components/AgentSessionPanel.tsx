@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { countRunningSubagents } from "@/lib/session-family";
 import type { SessionUsageSummary } from "@/lib/session-stats";
@@ -17,6 +17,13 @@ interface Props {
   openSubagentTabIds: ReadonlySet<string>;
   /** Opens a subagent's read-only viewer tab in the right panel (the `Agent` card's button), or closes it when open. */
   onToggleSubagentTab: (sessionId: string, label: string) => void;
+  /**
+   * A row to focus when the panel opens: the read-only viewer's hand-over names
+   * the sub-agent the user came to prompt. `focusNonce` makes a repeat request
+   * for the same row focus it again.
+   */
+  focusSessionId?: string | null;
+  focusNonce?: number;
 }
 
 const STATS_POLL_MS = 3000;
@@ -173,6 +180,8 @@ function AgentRow({
   onSelect,
   tabShown,
   onToggleTab,
+  focus,
+  focusNonce,
 }: {
   session: SessionInfo;
   main?: boolean;
@@ -182,8 +191,21 @@ function AgentRow({
   onSelect: () => void;
   tabShown?: boolean;
   onToggleTab?: () => void;
+  /** The hand-over from the read-only viewer asked for this row. */
+  focus?: boolean;
+  focusNonce?: number;
 }) {
   const { locale, t } = useI18n();
+  const rowRef = useRef<HTMLButtonElement | null>(null);
+  // Focus lands on the row the hand-over names, scrolled into view, once per
+  // request: the panel opens above the chat, so a keyboard user lands there.
+  useEffect(() => {
+    if (!focus) return;
+    const el = rowRef.current;
+    if (!el) return;
+    el.scrollIntoView({ block: "nearest" });
+    el.focus({ preventScroll: true });
+  }, [focus, focusNonce]);
   const relation = session.relation?.kind === "subagent" ? session.relation : null;
   const status: SubagentSessionStatus = running ? "running" : relation?.status ?? "completed";
   const primary = main ? t("agentSwitcher.main") : relation?.description || sessionTitle(session);
@@ -201,6 +223,7 @@ function AgentRow({
       }}
     >
       <button
+        ref={rowRef}
         type="button"
         role="option"
         aria-selected={selected}
@@ -279,7 +302,7 @@ function AgentRow({
   );
 }
 
-export function AgentSessionPanel({ rootSession, subagents, selectedSessionId, runningSessionIds, onSelectSession, openSubagentTabIds, onToggleSubagentTab }: Props) {
+export function AgentSessionPanel({ rootSession, subagents, selectedSessionId, runningSessionIds, onSelectSession, openSubagentTabIds, onToggleSubagentTab, focusSessionId = null, focusNonce = 0 }: Props) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
   const sortedSubagents = useMemo(() => [...subagents].sort((a, b) => {
@@ -389,6 +412,8 @@ export function AgentSessionPanel({ rootSession, subagents, selectedSessionId, r
               running={runningSessionIds.has(session.id)}
               usage={usage[session.id]}
               onSelect={() => onSelectSession(session)}
+              focus={focusSessionId === session.id}
+              focusNonce={focusNonce}
               tabShown={openSubagentTabIds.has(session.id)}
               onToggleTab={() => {
                 const relation = session.relation?.kind === "subagent" ? session.relation : null;

@@ -94,6 +94,15 @@ function ChatIcon({ size = 11 }: { size?: number }) {
   );
 }
 
+/** The sub-agent glyph the agent switcher uses, so a card and its row read the same. */
+function SubagentIcon({ size = 11 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" />
+    </svg>
+  );
+}
+
 function LinkIcon({ size = 11 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -576,6 +585,7 @@ export function CardView({
   highlighted,
   dragSource,
   query = "",
+  subagent,
   onOpenSession,
   onOpenMenu,
   onEdit,
@@ -591,6 +601,12 @@ export function CardView({
   awaiting: boolean;
   /** New activity in the linked session this browser has not opened: last of the three. */
   unread: boolean;
+  /**
+   * Set when the linked session is a sub-agent: its profile (null when the
+   * relation carries none). `undefined` marks an ordinary session or no link,
+   * so the chip can say who does the work and that only a read-only view opens.
+   */
+  subagent?: string | null;
   sessionGone: boolean;
   highlighted: boolean;
   /** True while this card is being dragged: it dims in place and the ghost carries it. */
@@ -624,6 +640,11 @@ export function CardView({
   const excerpt = normalizeKanbanQuery(query) ? kanbanDescriptionExcerpt(card.description, query) : null;
   const done = isLastLane;
   const linked = card.sessionId !== null;
+  // A sub-agent's card opens a read-only transcript, never the run: the chip
+  // says so, and its idle glyph is the sub-agent's, so a linked card shows
+  // whether a person or a sub-agent does the work without opening anything.
+  const isSubagent = subagent !== undefined;
+  const sessionName = card.sessionTitle ?? card.title;
   // The chip's leading slot is the activity slot. The sidebar row's precedence
   // (awaiting before running before new activity) and labels pick what holds it
   // while the linked session is active; idle keeps the session glyph. The slot's
@@ -711,7 +732,9 @@ export function CardView({
               if (sessionGone) return;
               onOpenSession(card.sessionId!, card.sessionTitle ?? card.title);
             }}
-            title={sessionGone ? t("kanban.menuSessionGone") : `${card.sessionTitle ?? card.title}`}
+            title={sessionGone ? t("kanban.menuSessionGone") : isSubagent ? `${sessionName} — ${t("kanban.cardSubagent")}` : sessionName}
+            aria-label={isSubagent ? `${sessionName} — ${t("kanban.cardSubagent")}` : undefined}
+            data-kanban-subagent={isSubagent ? "true" : undefined}
             disabled={sessionGone}
             style={{
               display: "inline-flex",
@@ -746,6 +769,10 @@ export function CardView({
                   aria-label={t("sidebar.newSessionActivity")}
                   className="session-tree-unread"
                 />
+              ) : isSubagent ? (
+                <span style={{ display: "inline-flex", color: "var(--accent)" }}>
+                  <SubagentIcon size={11} />
+                </span>
               ) : (
                 <ChatIcon size={10} />
               )}
@@ -1016,6 +1043,7 @@ export function LaneColumn({
   awaitingIds,
   unreadIds,
   sessionIds,
+  subagents,
   highlightCardId,
   form,
   onOpenForm,
@@ -1045,6 +1073,8 @@ export function LaneColumn({
   awaitingIds: Set<string>;
   unreadIds: Set<string>;
   sessionIds: Set<string>;
+  /** Session id → its sub-agent profile (null when the relation has none); absent for ordinary sessions. */
+  subagents: Map<string, string | null>;
   highlightCardId: string | null;
   /** The single card form, when it is in this lane. */
   form: { laneId: string; cardId: string | null } | null;
@@ -1196,6 +1226,7 @@ export function LaneColumn({
                 running={card.sessionId !== null && runningIds.has(card.sessionId)}
                 awaiting={card.sessionId !== null && awaitingIds.has(card.sessionId)}
                 unread={card.sessionId !== null && unreadIds.has(card.sessionId)}
+                subagent={card.sessionId !== null && subagents.has(card.sessionId) ? subagents.get(card.sessionId) : undefined}
                 sessionGone={sessionGone}
                 highlighted={highlightCardId === card.id}
                 dragSource={dragSourceCardId === card.id}
@@ -1769,6 +1800,16 @@ export function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardDa
   });
 
   const sessionIds = useMemo(() => new Set(sessions.map((s) => s.id)), [sessions]);
+  // Which cards a sub-agent does: the chip says so, and never claims its card
+  // through it (the board opens that session's read-only transcript).
+  const subagents = useMemo(
+    () => new Map(
+      sessions
+        .filter((session) => session.relation?.kind === "subagent")
+        .map((session) => [session.id, session.relation?.kind === "subagent" ? session.relation.profile ?? null : null] as const),
+    ),
+    [sessions],
+  );
   // The lane the phone shows must stay put: the arrival highlight is cleared
   // 2.4 s after landing (AppShell's board highlight timer), and that clear must
   // not drag the view back to the first lane that happens to hold cards.
@@ -2088,6 +2129,7 @@ export function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardDa
             awaitingIds={awaitingInputSessionIds}
             unreadIds={unreadSessionIds}
             sessionIds={sessionIds}
+            subagents={subagents}
             highlightCardId={flashId ?? highlightCardId ?? null}
             form={formFor}
             onOpenForm={openForm}

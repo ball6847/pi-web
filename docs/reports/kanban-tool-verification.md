@@ -42,3 +42,15 @@ The browser harness (`browser_setup`) refused: Chrome's remote debugging pipe is
 Live revision polling is confirmed: the DOM moved the card from Backlog to Done while the page stayed open, driven only by the child's tool calls. Console: no errors at either width. The delegation path was the PR's documented one — `POST /api/agent/<parent>` with the parent's prompt, the real `Agent` tool spawning the fixture child, whose real `kanban` calls did the work.
 
 Reproduce: `node e2e/kanban-agent-smoke.mjs --serve`, then open `boardUrl` from `test-results/kanban-agent-smoke/fixture.json`, `POST` its `delegateCommand` to `base + delegatePath`, and watch the card reach Done without reloading.
+
+## Follow-up: the sub-agent chip and the read-only hand-over
+
+Requested after the review: a card must say when a sub-agent does the work, and the read-only viewer must explain why it takes no input and where input happens. Both were captured and read against the same `--serve` fixture.
+
+| Evidence | Observed |
+| --- | --- |
+| [6 — sub-agent chip](screenshots/kanban-agent-tool/6-subagent-chip.png) | The child's card in Done carries the agent-switcher glyph in its chip and the hover text "Fix the unrelated flaky test — Handled by a sub-agent — open it from the board to read, from the main agent's chat to interact." An ordinary linked card keeps the plain chip ("chips before": the parent's chip has no `data-kanban-subagent`, the unlinked card keeps its link chip). |
+| [7 — read-only notice](screenshots/kanban-agent-tool/7-viewer-readonly-notice.png) | A banner under the viewer's header: "Read-only transcript. To interact with this sub-agent, open the main agent's chat." with an "Open the main agent's chat" button. |
+| [8 — hand-over](screenshots/kanban-agent-tool/8-handover-parent-chat.png) | The button selects the parent (the board view gives way to Chat: composer present, `[data-kanban-lane]` gone) and opens the agents panel with the child's row focused (`document.activeElement` is the `role="option"` row "Fix the unrelated flaky test · board-worker"). Console: no errors. |
+
+The viewer itself gained no input and no agent route: the hand-over is the only action, and it lands on the parent's chat, where the child is prompted.

@@ -103,8 +103,9 @@ test("child card is available via card, chip and menu; a truly missing session s
   assert.equal(cardElement.props.running, true);
   const cardView = ui.render("CardView", cardElement.props);
   cardView.result.props.onClick();
-  const chip = one(cardView, (node) => node.type === "button" && node.props.title === "Snapshot");
+  const chip = one(cardView, (node) => node.type === "button" && node.props.title === "Snapshot — kanban.cardSubagent");
   assert.equal(chip.props.disabled, false);
+  assert.equal(chip.props["data-kanban-subagent"], "true", "a sub-agent's card says who does the work");
   chip.props.onClick({ stopPropagation: noop });
   column.props.onOpenMenu(anchor, card);
   board.flush();
@@ -123,6 +124,27 @@ test("child card is available via card, chip and menu; a truly missing session s
   assert.equal(one(cardView, (node) => node.type === "button" && node.props.title === "kanban.menuSessionGone").props.disabled, true);
   cardView.result.props.onClick();
   assert.equal(opened.length, 3);
+});
+
+test("only a sub-agent's chip carries the sub-agent mark; an ordinary session keeps its plain title", (t) => {
+  const ui = setup();
+  t.after(() => ui.cleanup());
+  const topLevel = { id: "top", cwd: "/project", name: "Top level" };
+  const byParent = {
+    ...card,
+    sessionId: topLevel.id,
+    sessionTitle: "Parent work",
+  };
+  const board = ui.render("KanbanBoardView", boardProps([parent, child, topLevel], [byParent]));
+  const column = one(board, (node) => node.type === ui.components.LaneColumn);
+  const laneView = ui.render("LaneColumn", column.props);
+  assert.deepEqual([...column.props.subagents.keys()], [child.id]);
+  const cardView = ui.render("CardView", one(laneView, (node) => node.type === ui.components.CardView).props);
+  const chip = one(cardView, (node) => node.type === "button" && node.props.title === "Parent work");
+  assert.equal(chip.props["data-kanban-subagent"], undefined);
+  assert.equal(chip.props["aria-label"], undefined);
+  // The sub-agent profile rides along for the chip's hint (null when the relation has none).
+  assert.equal(column.props.subagents.get(child.id), null);
 });
 
 test("Link picker offers only top-level sessions and disables the menu choice when only children exist", (t) => {

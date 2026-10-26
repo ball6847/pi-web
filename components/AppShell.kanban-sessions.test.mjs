@@ -96,3 +96,43 @@ test("the board and viewer keep their actual shell bindings", async () => {
   assert.match(viewer, /fetch\(`\/api\/sessions\//);
   assert.match(viewer, /fetch\(contextUrl\(sessionId\)/);
 });
+
+test("the read-only viewer hands over to the parent's chat with the child's row focused", () => {
+  const log = [];
+  const selected = { id: "selected", cwd: "/other" };
+  const context = vm.createContext({
+    sessionsWithSelection: [selected, parent, child],
+    selectedSession: selected,
+    useCallback: (fn) => fn,
+    handleSelectSession: (session) => log.push(["select", session.id]),
+    setActiveTopPanel: (panel) => log.push(["panel", panel]),
+    setAgentPanelFocus: (value) => log.push(["focus", value.sessionId]),
+  });
+  evaluate("handleOpenSubagentParentChat", context)(parent.id, child.id);
+  // The panel opens after the selection: handleSelectSession() closes it when
+  // the project changes, so the reverse order would lose the panel.
+  assert.deepEqual(log.map(([kind]) => kind), ["select", "focus", "panel"]);
+  assert.deepEqual(log[0], ["select", parent.id]);
+  assert.deepEqual(log[1], ["focus", child.id]);
+  assert.deepEqual(log[2], ["panel", "agents"]);
+});
+
+test("a hand-over selects the already-open parent too (it leaves the board for the chat) and skips a gone parent", () => {
+  const log = [];
+  const context = vm.createContext({
+    sessionsWithSelection: [parent, child],
+    selectedSession: parent,
+    useCallback: (fn) => fn,
+    handleSelectSession: (session) => log.push(["select", session.id]),
+    setActiveTopPanel: (panel) => log.push(["panel", panel]),
+    setAgentPanelFocus: (value) => log.push(["focus", value.sessionId]),
+  });
+  evaluate("handleOpenSubagentParentChat", context)(parent.id, child.id);
+  // handleSelectSession() does not remount an already-open chat (it skips that
+  // work), but it is what closes a `?board=` view, so the hand-over calls it.
+  assert.deepEqual(log.map(([kind]) => kind), ["select", "focus", "panel"]);
+  assert.deepEqual(log[0], ["select", parent.id]);
+  log.length = 0;
+  evaluate("handleOpenSubagentParentChat", context)("gone", child.id);
+  assert.deepEqual(log, [], "a parent that left the catalogue opens nothing");
+});
