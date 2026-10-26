@@ -17,6 +17,7 @@ import { cardForSession, sessionlessCardsByRecency } from "@/lib/kanban-shared";
 import { kanbanSearchForJump, kanbanSearchForProject, type KanbanSearchState } from "@/lib/kanban-search";
 import { sessionsForKanbanBoard } from "@/lib/kanban-sessions";
 import {
+  kanbanAdoptServerBoard,
   kanbanAdvanceCard,
   kanbanBoardSnapshot,
   kanbanCreateCardForSession,
@@ -27,6 +28,7 @@ import {
 } from "@/lib/kanban";
 import {
   KANBAN_BACKLOG_LANE_ID,
+  type KanbanAttachOutcome,
   KANBAN_OFF_PENDING,
   type KanbanCard,
   type KanbanNewSessionPending,
@@ -1056,7 +1058,7 @@ export function AppShell() {
   }, []);
 
   // Called by ChatWindow when a new session gets its real id from pi
-  const handleSessionCreated = useCallback((session: SessionInfo, sourceDraftKey: string) => {
+  const handleSessionCreated = useCallback((session: SessionInfo, sourceDraftKey: string, kanban?: KanbanAttachOutcome) => {
     setRefreshKey((k) => k + 1);
     if (activeNewSessionDraftKeyRef.current !== sourceDraftKey) return;
     invalidateWorkspaceRestore();
@@ -1083,7 +1085,20 @@ export function AppShell() {
     if (pendingPick.kind !== "off") {
       const dir = pendingPick.projectDir;
       const title = session.name || session.firstMessage || session.id;
-      if (pendingPick.kind === "new-card") {
+      if (kanban?.ok) {
+        // The prompt carried the pick and the route wrote it before the run
+        // started, so the run's own board notice already named the card. Adopt
+        // the board it answers with; posting the same link again would only
+        // rewrite it.
+        kanbanAdoptServerBoard(dir, kanban.board, kanban.revision);
+      } else if (kanban) {
+        // The route answered with the board's refusal: the card was taken or
+        // deleted while the composer waited, or the lane is gone. The strip says
+        // "Not on board", which is what happened.
+        console.warn(`[pi-web] kanban: the picked card was not attached — ${kanban.error}`);
+      } else if (pendingPick.kind === "new-card") {
+        // No board write from the route (an older server, or the pick arrived
+        // after the first prompt): keep the old client-side path.
         kanbanCreateCardForSession(dir, session.id, title, pendingPick.laneId);
       } else {
         const card = kanbanBoardSnapshot(dir)?.cards.find((c) => c.id === pendingPick.cardId) ?? null;
@@ -3020,6 +3035,7 @@ export function AppShell() {
               unlockAudio={unlockAudio}
               holdAudio={holdAudio}
               kanbanStrip={kanbanStrip}
+              newSessionKanbanPick={selectedSession === null ? newSessionKanbanPending : null}
             />
             </div>
             {centerView === "board" && boardProjectDir ? (

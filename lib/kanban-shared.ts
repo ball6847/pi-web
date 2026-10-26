@@ -391,6 +391,42 @@ export function deleteLane(board: KanbanBoard, laneId: string, now: number): Kan
 }
 
 // ---------------------------------------------------------------------------
+// A new session's card
+// ---------------------------------------------------------------------------
+
+/** What a fresh composer's "Track on board" choice asks for once its session exists. */
+export type KanbanSessionCardPick = { cardId: string } | { laneId: string };
+
+/**
+ * The card a brand-new session starts on, applied **before** its first prompt
+ * runs (the route that sends the prompt owns this write). It is the same pair
+ * of rules the composer used to apply afterwards, in one step: a backlog card
+ * advances one lane first (the backlog never takes a session), a work-lane card
+ * is linked as it is, and a "new card in {lane}" creates the session's card in
+ * that lane (a lane that vanished falls back to the first work lane).
+ *
+ * Null when the rules refuse it: an unknown card, a card another session owns,
+ * or a card that cannot leave the backlog. A session's own card is reused, so a
+ * retried prompt is not a second card.
+ */
+export function attachSessionCard(
+  board: KanbanBoard,
+  sessionId: string,
+  sessionTitle: string,
+  pick: KanbanSessionCardPick,
+  now: number,
+): KanbanBoard | null {
+  if ("laneId" in pick) return createCardForSession(board, sessionId, sessionTitle, pick.laneId, now);
+  const card = board.cards.find((c) => c.id === pick.cardId);
+  if (!card) return null;
+  if (card.sessionId !== null && card.sessionId !== sessionId) return null;
+  // Backlog first, then link: `linkCard` refuses a fixed lane.
+  const moved = laneById(board, card.laneId)?.fixed ? advanceCard(board, card.id, now) : board;
+  if (!moved) return null;
+  return linkCard(moved, card.id, sessionId, sessionTitle, now);
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
 

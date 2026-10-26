@@ -142,3 +142,13 @@ export interface KanbanBoardResponse {
   board: KanbanBoard;
   revision: number;
 }
+
+/**
+ * What `POST /api/agent/[id]` did with a fresh composer's "Track on board" pick.
+ * It is applied before the prompt runs, so the run's own board notice already
+ * names the card; the client adopts the board it answers with instead of posting
+ * a second link.
+ */
+export type KanbanAttachOutcome =
+  | { ok: true; board: KanbanBoard; revision: number }
+  | { ok: false; error: string; code?: string };
