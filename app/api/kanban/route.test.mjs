@@ -122,7 +122,7 @@ test("a GET auto-creates the board on first read and answers the second read wit
   assert.equal(first.body.board.lanes.length, 6);
   assert.deepEqual(first.body.board.cards, []);
   assert.ok(f.exists());
-  assert.equal(f.schema(), 1, "the file carries the board schema stamp");
+  assert.equal(f.schema(), 2, "the file carries the board schema stamp");
   assert.deepEqual(f.files(), ["kanban.sqlite"], "the board is one self-contained file");
 
   const rows = f.rows();
@@ -308,7 +308,7 @@ test("a POST on a board from a newer schema is a 500 unsupported-schema and leav
   const f = fixture(t);
   await get(f.project);
   const stamp = new DatabaseSync(f.path);
-  stamp.exec("PRAGMA user_version = 2");
+  stamp.exec("PRAGMA user_version = 3");
   stamp.close();
   const newer = f.rows();
 
@@ -373,7 +373,7 @@ test("a creating GET on a corrupt file sets it aside and answers a fresh board",
   assert.equal(read.body.board.lanes.length, 6);
   assert.equal(read.body.board.cards.length, 0);
   assert.equal(corruptBackups(f).length, 1, "exactly one backup sibling");
-  assert.equal(f.schema(), 1, "the new file is a valid board");
+  assert.equal(f.schema(), 2, "the new file is a valid board");
 });
 
 test("a POST on a corrupt file sets it aside, applies the action to a fresh board, and has no corrupt flag of its own", async (t) => {
@@ -549,6 +549,39 @@ test("lane operations: add (client id, dup id refused), rename (backlog refused)
   assert.equal(relocated.sessionId, null);
 });
 
+test("edit-lane: instructions and description patch, capped, backlog refused, one field required", async (t) => {
+  const f = fixture(t);
+  await get(f.project);
+
+  const edited = await post({ cwd: f.project, action: "edit-lane", laneId: "lane-plan", instructions: "Design first, code second." });
+  assert.equal(edited.status, 200);
+  assert.equal(edited.body.board.lanes.find((l) => l.id === "lane-plan").instructions, "Design first, code second.");
+
+  // The fixed backlog is never edited, and a patch that names neither field is invalid.
+  const backlog = await post({ cwd: f.project, action: "edit-lane", laneId: "lane-backlog", instructions: "x" });
+  assert.equal(backlog.status, 400);
+  assert.equal(backlog.body.code, "refused");
+  const neither = await post({ cwd: f.project, action: "edit-lane", laneId: "lane-plan" });
+  assert.equal(neither.status, 400);
+  assert.equal(neither.body.code, "invalid-request");
+
+  // The injection cap: instructions are model context, so a lane cannot grow unbounded.
+  const tooLong = await post({ cwd: f.project, action: "edit-lane", laneId: "lane-plan", instructions: "x".repeat(2001) });
+  assert.equal(tooLong.status, 400);
+  assert.equal(tooLong.body.code, "invalid-request");
+  const atCap = await post({ cwd: f.project, action: "edit-lane", laneId: "lane-plan", instructions: "x".repeat(2000) });
+  assert.equal(atCap.status, 200);
+
+  // Empty clears.
+  const cleared = await post({ cwd: f.project, action: "edit-lane", laneId: "lane-plan", instructions: "" });
+  assert.equal(cleared.status, 200);
+  assert.equal("instructions" in cleared.body.board.lanes.find((l) => l.id === "lane-plan"), false);
+
+  const unknown = await post({ cwd: f.project, action: "edit-lane", laneId: "lane-nope", instructions: "x" });
+  assert.equal(unknown.status, 400);
+  assert.equal(unknown.body.code, "refused");
+});
+
 test("edit-card: title and description update, neither is an invalid request, an unknown card is refused", async (t) => {
   const f = fixture(t);
   await get(f.project);
@@ -643,7 +676,7 @@ test("a fresh board's rows are exactly the answered board, one self-contained fi
   assert.equal(res.status, 200);
   assert.deepEqual(f.board(), res.body.board, "what the answer says is what the rows hold");
   assert.deepEqual(f.files(), ["kanban.sqlite"], "no journal or sidecar is left beside it");
-  assert.equal(f.schema(), 1);
+  assert.equal(f.schema(), 2);
   assert.equal(f.revision(), res.body.revision);
   assert.equal(f.stat().mode & 0o777, 0o644);
 });

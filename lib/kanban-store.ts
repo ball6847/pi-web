@@ -11,6 +11,7 @@ import {
   inTransaction,
   kanbanBoardDir,
   kanbanBoardPath,
+  migrateKanbanDatabase,
   openKanbanDatabase,
   readBoardRevision,
   readBoardRows,
@@ -22,7 +23,7 @@ import {
   applyKanbanToolMutation, kanbanToolMutationResult, kanbanToolOverview, kanbanToolRead, kanbanToolSearch, parseKanbanToolRequest,
   type KanbanToolActor, type KanbanToolResult,
 } from "./kanban-tool-domain";
-import { KANBAN_SCHEMA_VERSION, makeKanbanId, type KanbanAction, type KanbanBoard, type KanbanCard } from "./kanban-types";
+import { KANBAN_JSON_SCHEMA_VERSION, KANBAN_SCHEMA_VERSION, makeKanbanId, type KanbanAction, type KanbanBoard, type KanbanCard } from "./kanban-types";
 import { isMcpEntryRefusal, validateMcpProject } from "./mcp-entry-request";
 import { readRegularFileText } from "./regular-file";
 import { invalidateSessionPathCache, readSessionHeader, resolveSessionPath } from "./session-reader";
@@ -214,7 +215,13 @@ type Opened =
   | { kind: "newer"; version: number }
   | { kind: "corrupt"; error: string };
 
-/** Opens the board file and reads it when it is a board. Looking at a board never creates or writes one. */
+/**
+ * Opens the board file and reads it when it is a board. Looking at a board
+ * never creates one. The one write an older (v1) file meets on ANY open —
+ * reading included — is its additive schema migration: the columns must exist
+ * before the rows can be read at all, the migration is lossless, and it never
+ * bumps the revision (the data is unchanged, only its storage).
+ */
 function openBoard(path: string, projectDir: string): Opened {
   const { state, db } = inspectKanbanFile(path, { timeout: DB_TIMEOUT_MS });
   switch (state.kind) {
@@ -227,9 +234,11 @@ function openBoard(path: string, projectDir: string): Opened {
       return { kind: "corrupt", error: state.error };
     case "empty":
       return db ? { kind: "empty", db } : { kind: "corrupt", error: "the kanban database could not be opened" };
+    case "migrate":
     case "ready": {
       if (!db) return { kind: "corrupt", error: "the kanban database could not be opened" };
       try {
+        if (state.kind === "migrate") migrateKanbanDatabase(db);
         return { kind: "ready", db, snapshot: readBoardRows(db, projectDir) };
       } catch (error) {
         closeKanbanDatabase(db);
@@ -246,8 +255,9 @@ function closeOpened(opened: Opened): void {
 
 /**
  * The board's revision, as a pure read: one `meta` row, no board parsing, no
- * write, no pruning (the client's poll). A board never written reads 0 and is
- * not created by asking.
+ * migration, no write, no pruning (the client's poll). A board never written
+ * reads 0 and is not created by asking; an older-schema board answers its
+ * revision as it stands (the migration a full open makes does not bump it).
  */
 export async function getBoardRevision(cwd: string): Promise<{ ok: true; revision: number } | KanbanFailure> {
   const valid = await validateKanbanCwd(cwd);
@@ -255,13 +265,17 @@ export async function getBoardRevision(cwd: string): Promise<{ ok: true; revisio
   const path = kanbanBoardPath(await boardProjectRoot(valid.cwd));
   if (!existsSync(path)) return { ok: true, revision: 0 };
   try {
-    const opened = openBoard(path, valid.cwd);
+    const { state, db } = inspectKanbanFile(path, { timeout: DB_TIMEOUT_MS });
+    if (!db) {
+      if (state.kind === "newer") throw new KanbanSchemaError(unsupportedSchemaMessage(state.version));
+      return { ok: true, revision: 0 }; // missing/corrupt/empty: the read replaces it
+    }
     try {
-      if (opened.kind === "newer") throw new KanbanSchemaError(unsupportedSchemaMessage(opened.version));
-      if (opened.kind !== "ready") return { ok: true, revision: 0 }; // missing/corrupt/empty: the read replaces it
-      return { ok: true, revision: opened.snapshot.revision };
+      if (state.kind === "newer") throw new KanbanSchemaError(unsupportedSchemaMessage(state.version));
+      if (state.kind === "empty" || state.kind === "corrupt") return { ok: true, revision: 0 };
+      return { ok: true, revision: readBoardRevision(db) };
     } finally {
-      closeOpened(opened);
+      closeKanbanDatabase(db);
     }
   } catch (error) {
     return toFailure(error);
@@ -281,6 +295,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * an existing board into SQLite. Deliberately lenient, exactly as that storage
  * read it: a file that is not a board is `null`, a card in a vanished lane goes
  * to the backlog unlinked, and a session carried twice stays on its first card.
+ * The JSON generation is frozen at `KANBAN_JSON_SCHEMA_VERSION`; one claiming a
+ * higher version is left in place, exactly as a newer database is refused.
  */
 function parseJsonBoard(text: string, projectDir: string): KanbanBoard | null {
   let raw: unknown;
@@ -290,8 +306,8 @@ function parseJsonBoard(text: string, projectDir: string): KanbanBoard | null {
     return null;
   }
   if (!isRecord(raw) || typeof raw.schemaVersion !== "number") return null;
-  if (raw.schemaVersion > KANBAN_SCHEMA_VERSION) throw new KanbanSchemaError(unsupportedSchemaMessage(raw.schemaVersion));
-  if (raw.schemaVersion !== KANBAN_SCHEMA_VERSION || !isRecord(raw.board)) return null;
+  if (raw.schemaVersion > KANBAN_JSON_SCHEMA_VERSION) throw new KanbanSchemaError(unsupportedSchemaMessage(raw.schemaVersion));
+  if (raw.schemaVersion !== KANBAN_JSON_SCHEMA_VERSION || !isRecord(raw.board)) return null;
   if (!Array.isArray(raw.board.lanes) || !Array.isArray(raw.board.cards)) return null;
 
   const lanes: KanbanLaneRow[] = [];
@@ -301,6 +317,7 @@ function parseJsonBoard(text: string, projectDir: string): KanbanBoard | null {
     const fixed = value.fixed === true;
     if (index === 0 && !fixed) return null;
     const lane: KanbanLaneRow = { id: value.id, name: value.name, description: typeof value.description === "string" ? value.description : "" };
+    if (typeof value.instructions === "string" && value.instructions.trim()) lane.instructions = value.instructions.trim();
     if (fixed || index === 0) lane.fixed = true;
     lanes.push(lane);
   }

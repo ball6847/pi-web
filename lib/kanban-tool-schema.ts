@@ -13,7 +13,11 @@ export const KanbanToolParameters = Type.Object({
 }, { additionalProperties: false });
 
 const NullableString = Type.Union([Type.String(), Type.Null()]);
-const Lane = Type.Object({ id: Type.String(), name: Type.String(), description: Type.String(), fixed: Type.Optional(Type.Boolean()) });
+/* A full lane (one card's own lane) may carry the model-facing instructions; the all-lanes projections never do. */
+const Lane = Type.Object({
+  id: Type.String(), name: Type.String(), description: Type.String(),
+  instructions: Type.Optional(Type.String()), fixed: Type.Optional(Type.Boolean()),
+});
 const Card = Type.Object({
   id: Type.String(), title: Type.String(), description: Type.String(), laneId: Type.String(),
   sessionId: NullableString, sessionTitle: NullableString, createdAt: Type.Number(), updatedAt: Type.Number(),

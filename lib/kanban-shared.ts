@@ -312,6 +312,34 @@ export function renameLane(board: KanbanBoard, laneId: string, name: string): Ka
   return { ...board, lanes: board.lanes.map((l) => (l.id === laneId ? { ...l, name: trimmed } : l)) };
 }
 
+/**
+ * A work lane's text: `description` (UI text) and/or `instructions`
+ * (model-facing, injected when a card enters the lane). An empty string
+ * clears; omitted fields stay as they are. Refused (null) for an unknown lane
+ * or the fixed backlog; a patch that changes nothing returns the SAME board.
+ */
+export function editLane(
+  board: KanbanBoard,
+  laneId: string,
+  patch: { description?: string; instructions?: string },
+): KanbanBoard | null {
+  const lane = laneById(board, laneId);
+  if (!lane || lane.fixed) return null;
+  const description = patch.description !== undefined ? patch.description.trim() : lane.description;
+  const instructions = patch.instructions !== undefined ? patch.instructions.trim() : (lane.instructions ?? "");
+  if (description === lane.description && instructions === (lane.instructions ?? "")) return board;
+  return {
+    ...board,
+    lanes: board.lanes.map((l) => {
+      if (l.id !== laneId) return l;
+      const next: KanbanLane = { ...l, description, instructions };
+      // An empty string clears to "absent", the shape an untouched lane keeps.
+      if (!instructions) delete next.instructions;
+      return next;
+    }),
+  };
+}
+
 /** One step left (-1) or right (1). Refused (null) off the ends, for the fixed lane, or past it. */
 export function moveLane(board: KanbanBoard, laneId: string, direction: -1 | 1): KanbanBoard | null {
   const index = laneIndex(board, laneId);
@@ -394,6 +422,8 @@ export function applyKanbanAction(board: KanbanBoard, request: KanbanAction, now
       return addLane(board, request.name, request.description ?? "", request.laneId);
     case "rename-lane":
       return renameLane(board, request.laneId, request.name);
+    case "edit-lane":
+      return editLane(board, request.laneId, { description: request.description, instructions: request.instructions });
     case "move-lane":
       return moveLane(board, request.laneId, request.direction);
     case "reorder-lane":

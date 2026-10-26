@@ -8,7 +8,14 @@
 export interface KanbanLane {
   id: string;
   name: string;
+  /** UI text, shown in the board views. Never injected into a run. */
   description: string;
+  /**
+   * Model-facing "how to work here" text, injected as one custom message when
+   * a session's card enters this lane (`lib/kanban-extension.ts`). Absent or
+   * blank means none; capped at `KANBAN_LANE_INSTRUCTIONS_MAX` characters.
+   */
+  instructions?: string;
   /** The first lane, "backlog": never renamed, moved or removed. */
   fixed?: boolean;
 }
@@ -32,11 +39,19 @@ export interface KanbanBoard {
   cards: KanbanCard[];
 }
 
-export const KANBAN_SCHEMA_VERSION = 1;
+/** The SQLite board file's schema stamp (`PRAGMA user_version`). */
+export const KANBAN_SCHEMA_VERSION = 2;
 
-/** What the board's shared `kanban.json` holds. */
+/**
+ * The last version the replaced JSON storage wrote. Its files are frozen at 1
+ * and imported leniently (`parseJsonBoard` in `lib/kanban-store.ts`); a JSON
+ * board claiming a higher version is from a newer pi-web and stays in place.
+ */
+export const KANBAN_JSON_SCHEMA_VERSION = 1;
+
+/** What the board's legacy shared `kanban.json` (schema 1) held. */
 export interface KanbanEnvelope {
-  schemaVersion: typeof KANBAN_SCHEMA_VERSION;
+  schemaVersion: number;
   board: KanbanBoard;
 }
 
@@ -98,6 +113,7 @@ export type KanbanAction =
   | { action: "create-card-for-session"; sessionId: string; sessionTitle: string; laneId: string | null; cardId?: string }
   | { action: "add-lane"; name: string; description?: string; laneId?: string }
   | { action: "rename-lane"; laneId: string; name: string }
+  | { action: "edit-lane"; laneId: string; description?: string; instructions?: string }
   | { action: "move-lane"; laneId: string; direction: -1 | 1 }
   | { action: "reorder-lane"; laneId: string; toIndex: number }
   | { action: "delete-lane"; laneId: string };
@@ -115,6 +131,7 @@ export const KANBAN_ACTION_NAMES: readonly KanbanActionName[] = [
   "create-card-for-session",
   "add-lane",
   "rename-lane",
+  "edit-lane",
   "move-lane",
   "reorder-lane",
   "delete-lane",

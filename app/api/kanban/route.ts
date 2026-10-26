@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { KANBAN_LANE_INSTRUCTIONS_MAX } from "@/lib/kanban-tool-limits";
 import type { KanbanAction, KanbanBoardResponse } from "@/lib/kanban-types";
 import {
   applyMutation,
@@ -28,6 +29,7 @@ import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security"
 //      link-session { cardId, sessionId, sessionTitle } unlink-session { cardId }
 //      create-card-for-session { sessionId, sessionTitle, laneId|null, cardId? }
 //      add-lane { name, description?, laneId? }        rename-lane { laneId, name }
+//      edit-lane { laneId, description?, instructions? }
 //      move-lane { laneId, direction: -1|1 }           reorder-lane { laneId, toIndex }
 //      delete-lane { laneId }
 //
@@ -51,6 +53,8 @@ const STATUS: Record<KanbanFailureCode, number> = {
 const MAX_ID = 200;
 const MAX_NAME = 500;
 const MAX_TEXT = 20_000;
+/** Lane instructions are injected into runs: capped where they are written. */
+const MAX_LANE_INSTRUCTIONS = KANBAN_LANE_INSTRUCTIONS_MAX;
 
 function refusal(status: number, code: string, error: string) {
   return NextResponse.json({ error, code }, { status });
@@ -149,6 +153,12 @@ function readAction(body: Record<string, unknown>): KanbanAction {
       };
     case "rename-lane":
       return { action: "rename-lane", laneId: required(body, "laneId", MAX_ID), name: required(body, "name", MAX_NAME) };
+    case "edit-lane": {
+      const description = optional(body, "description", MAX_NAME);
+      const instructions = optional(body, "instructions", MAX_LANE_INSTRUCTIONS);
+      if (description === undefined && instructions === undefined) throw new Invalid("edit-lane needs a description or instructions");
+      return { action: "edit-lane", laneId: required(body, "laneId", MAX_ID), description, instructions };
+    }
     case "move-lane": {
       if (body.direction !== -1 && body.direction !== 1) throw new Invalid("direction must be -1 or 1");
       return { action: "move-lane", laneId: required(body, "laneId", MAX_ID), direction: body.direction };
