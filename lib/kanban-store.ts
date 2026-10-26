@@ -19,7 +19,7 @@ import {
 } from "./kanban-data";
 import { applyKanbanAction, pruneDeadLinks } from "./kanban-shared";
 import {
-  applyKanbanToolMutation, kanbanToolMutationResult, kanbanToolRead, parseKanbanToolRequest,
+  applyKanbanToolMutation, kanbanToolMutationResult, kanbanToolOverview, kanbanToolRead, kanbanToolSearch, parseKanbanToolRequest,
   type KanbanToolActor, type KanbanToolResult,
 } from "./kanban-tool-domain";
 import { KANBAN_SCHEMA_VERSION, makeKanbanId, type KanbanAction, type KanbanBoard, type KanbanCard } from "./kanban-types";
@@ -639,9 +639,14 @@ export async function executeKanbanToolRequest(
       return failure("session-missing", "The executing session does not exist in this project yet. Wait for its session file to be saved, then retry.");
     }
     checkKanbanSignal(signal);
-    if (request.action === "read") {
+    if (request.action === "read" || request.action === "search") {
       const snapshot = await readBoard(valid.cwd, { create: false });
-      return snapshot.ok ? kanbanToolRead(snapshot.board, snapshot.revision, actor.sessionId, request.cardId) : snapshot;
+      if (!snapshot.ok) return snapshot;
+      // Reads are projections: the overview and search rows never carry card bodies.
+      if (request.action === "search") return kanbanToolSearch(snapshot.board, snapshot.revision, actor.sessionId, request);
+      return request.cardId === undefined
+        ? kanbanToolOverview(snapshot.board, snapshot.revision, actor.sessionId)
+        : kanbanToolRead(snapshot.board, snapshot.revision, actor.sessionId, request.cardId);
     }
     let cardId = "";
     const edited = await editBoard(projectRoot, async (board, now) => {
