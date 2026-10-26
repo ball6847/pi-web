@@ -29,6 +29,8 @@ import {
   type KanbanLane,
 } from "@/lib/kanban-types";
 import { cardsOfLane, canRestInLane } from "@/lib/kanban-shared";
+import { kanbanDescriptionExcerpt, normalizeKanbanQuery, searchKanbanBoard } from "@/lib/kanban-search";
+import { KanbanSearchField, KanbanSearchStyles, KanbanSearchText } from "./KanbanSearch";
 import {
   kanbanAddCard,
   kanbanAddLane,
@@ -50,6 +52,9 @@ export interface KanbanBoardProps {
   projectDir: string;
   /** Display name of the project the board belongs to. */
   projectName: string;
+  /** Page-memory query owned above the board/chat unmount, never in the board cache. */
+  query: string;
+  onQueryChange(query: string): void;
   /** The project's top-level pi sessions, for the link pickers and "Open session". */
   sessions: SessionInfo[];
   runningSessionIds: Set<string>;
@@ -575,6 +580,7 @@ export function CardView({
   sessionGone,
   highlighted,
   dragSource,
+  query = "",
   onOpenSession,
   onOpenMenu,
   onEdit,
@@ -594,6 +600,7 @@ export function CardView({
   highlighted: boolean;
   /** True while this card is being dragged: it dims in place and the ghost carries it. */
   dragSource: boolean;
+  query?: string;
   onOpenSession(sessionId: string, title: string): void;
   onOpenMenu(anchor: DOMRect, card: KanbanCard): void;
   onEdit(card: KanbanCard): void;
@@ -619,6 +626,7 @@ export function CardView({
     return () => el.removeEventListener("touchmove", onCardTouchMove);
   }, [onCardTouchMove]);
 
+  const excerpt = normalizeKanbanQuery(query) ? kanbanDescriptionExcerpt(card.description, query) : null;
   const done = isLastLane;
   const linked = card.sessionId !== null;
   // The chip's leading slot is the activity slot. The sidebar row's precedence
@@ -664,7 +672,7 @@ export function CardView({
                 <polyline points="20 6 9 17 4 12" />
               </svg>
             )}
-            <span style={{ fontSize: 12.5, fontWeight: 500, color: "var(--text)", overflowWrap: "anywhere" }}>{card.title}</span>
+            <span style={{ fontSize: 12.5, fontWeight: 500, color: "var(--text)", overflowWrap: "anywhere" }}><KanbanSearchText text={card.title} query={query} /></span>
           </div>
           {card.description && (
             <div
@@ -674,13 +682,15 @@ export function CardView({
                 lineHeight: 1.45,
                 color: "var(--text-muted)",
                 display: "-webkit-box",
-                WebkitLineClamp: 3,
+                WebkitLineClamp: excerpt ? undefined : 3,
                 WebkitBoxOrient: "vertical",
                 overflow: "hidden",
                 overflowWrap: "anywhere",
               }}
             >
-              {card.description}
+              {excerpt?.leading && "…"}
+              <KanbanSearchText text={excerpt?.text ?? card.description} query={query} />
+              {excerpt?.trailing && "…"}
             </div>
           )}
         </div>
@@ -999,8 +1009,11 @@ function CardForm({
 
 // -- lane ----------------------------------------------------------------------
 
-function LaneColumn({
-  board,
+export function LaneColumn({
+  search,
+  query,
+  matchingLane,
+  onShowMatchingLane,
   projectDir,
   lane,
   isLast,
@@ -1026,7 +1039,10 @@ function LaneColumn({
   laneDragging,
   onLaneHeaderPointerDown,
 }: {
-  board: KanbanBoardData;
+  search: ReturnType<typeof searchKanbanBoard>["lanes"][number];
+  query: string;
+  matchingLane?: KanbanLane;
+  onShowMatchingLane?(): void;
   projectDir: string;
   lane: KanbanLane;
   isLast: boolean;
@@ -1060,7 +1076,8 @@ function LaneColumn({
   onLaneHeaderPointerDown(event: ReactPointerEvent<HTMLElement>, lane: KanbanLane): void;
 }) {
   const { t } = useI18n();
-  const cards = cardsOfLane(board, lane.id);
+  const cards = search.renderedCards;
+  const filtering = normalizeKanbanQuery(query).length > 0;
   const formHere = form?.laneId === lane.id ? form : null;
   // The drop line sits in the gap the release lands in: above the card it goes
   // before, or after the lane's last one.
@@ -1116,7 +1133,7 @@ function LaneColumn({
         <span style={{ fontSize: 11.5, fontWeight: 700, color: lane.fixed ? "var(--text-muted)" : "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "55%" }} title={lane.name}>
           {lane.name}
         </span>
-        <span style={{
+        <span data-kanban-lane-count={lane.id} aria-label={filtering ? t("kanban.searchLaneCount", { matched: search.cards.length, total: search.total }) : undefined} style={{
           minWidth: 16,
           height: 15,
           padding: "0 4px",
@@ -1129,7 +1146,7 @@ function LaneColumn({
           fontVariantNumeric: "tabular-nums",
           flexShrink: 0,
         }}>
-          {cards.length}
+          {filtering ? `${search.cards.length}/${search.total}` : search.total}
         </span>
         <span style={{ flex: 1 }} />
         <GhostButton
@@ -1188,6 +1205,7 @@ function LaneColumn({
                 sessionGone={sessionGone}
                 highlighted={highlightCardId === card.id}
                 dragSource={dragSourceCardId === card.id}
+                query={query}
                 onOpenSession={onOpenSession}
                 onOpenMenu={onOpenMenu}
                 onEdit={(target) => onOpenForm(lane.id, target)}
@@ -1213,7 +1231,10 @@ function LaneColumn({
         )}
         {cards.length === 0 && !formHere && (
           <div style={{ padding: "10px 8px", textAlign: "center", fontSize: 11, color: "var(--text-dim)" }}>
-            {t("kanban.laneEmpty")}
+            {t(filtering && search.total > 0 ? "kanban.searchLaneNoMatches" : "kanban.laneEmpty")}
+            {filtering && mobile && matchingLane && (
+              <div><button type="button" className="kanban-search-link" onClick={onShowMatchingLane}>{t("kanban.searchMatchingLane", { lane: matchingLane.name })}</button></div>
+            )}
           </div>
         )}
       </div>
@@ -1470,7 +1491,7 @@ function LaneConfig({
   );
 }
 
-function ConfigLaneRow({
+export function ConfigLaneRow({
   lane,
   index,
   count,
@@ -1640,27 +1661,19 @@ function BoardNotice({ error, onRetry }: { error: string; onRetry(): void }) {
 }
 
 /** The frame of the board (header, content area) while there is no board to draw: the lanes arrive into the same box. */
-function BoardShell({ projectName, taskCount, children }: { projectName: string; taskCount: number | null; children: React.ReactNode }) {
+function BoardShell({ projectName, query, onQueryChange, children }: Pick<KanbanBoardProps, "projectName" | "query" | "onQueryChange"> & { children: React.ReactNode }) {
   const { t } = useI18n();
+  const mobile = useIsMobile();
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg)", minWidth: 0 }}>
-      <header style={{
-        flexShrink: 0,
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        height: 40,
-        padding: "0 12px",
-        background: "var(--bg-panel)",
-        borderBottom: "1px solid var(--border)",
-      }}>
-        <KanbanIcon size={15} style={{ color: "var(--accent)" }} />
-        <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "50%" }} title={projectName}>
-          {projectName}
-        </span>
-        {taskCount !== null && (
-          <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0 }}>{t("kanban.boardTasks", { count: taskCount })}</span>
-        )}
+    <div className="kanban-board" style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg)", minWidth: 0 }}>
+      <KanbanSearchStyles />
+      <header className="kanban-board-header">
+        <div className="kanban-board-heading"><KanbanIcon size={15} style={{ color: "var(--accent)" }} /><span className="kanban-board-name" title={projectName}>{projectName}</span></div>
+        <KanbanSearchField query={query} onQueryChange={onQueryChange} disabled />
+        <button type="button" className="kanban-board-configure" disabled aria-label={t("kanban.boardConfigure")}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, height: 28, padding: "0 10px", fontSize: 11.5, color: "var(--text-dim)", background: "none", border: "1px solid var(--border)", borderRadius: 7 }}>
+          <span aria-hidden="true" style={{ display: "inline-block", width: 12 }}>…</span>{!mobile && t("kanban.boardConfigure")}
+        </button>
       </header>
       {children}
     </div>
@@ -1674,7 +1687,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const notice = status === "error" ? <BoardNotice error={error ?? ""} onRetry={retry} /> : null;
   if (board) return <KanbanBoardView {...props} board={board} notice={notice} />;
   return (
-    <BoardShell projectName={projectName} taskCount={null}>
+    <BoardShell projectName={projectName} query={props.query} onQueryChange={props.onQueryChange}>
       {notice}
       {status === "error" ? null : (
         <div role="status" style={{ padding: "14px 16px", fontSize: 12, color: "var(--text-dim)" }}>
@@ -1685,8 +1698,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
   );
 }
 
-function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; notice: React.ReactNode }) {
-  const { board, projectDir, projectName, sessions, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, highlightCardId, onOpenSession, onStartSession, notice } = props;
+export function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; notice: React.ReactNode }) {
+  const { board, projectDir, projectName, sessions, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, highlightCardId, query, onQueryChange, onOpenSession, onStartSession, notice } = props;
   const { t } = useI18n();
   const mobile = useIsMobile();
   const [configOpen, setConfigOpen] = useState(false);
@@ -1694,6 +1707,13 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
   // half-visible neighbour reads as a broken board. A tab strip switches lanes.
   const [mobileLaneId, setMobileLaneId] = useState<string | null>(null);
   const [formFor, setFormFor] = useState<{ laneId: string; cardId: string | null } | null>(null);
+  const search = useMemo(() => searchKanbanBoard(board, query, formFor?.cardId), [board, query, formFor?.cardId]);
+  const filtering = search.active;
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const clearSearch = () => {
+    onQueryChange("");
+    searchInputRef.current?.focus({ preventScroll: true });
+  };
   const [menuFor, setMenuFor] = useState<{ cardId: string; anchor: DOMRect; ignoreOutsideUntil?: number } | null>(null);
   const [linkFor, setLinkFor] = useState<{ cardId: string; anchor: DOMRect } | null>(null);
   const boardRef = useRef<HTMLDivElement | null>(null);
@@ -1732,13 +1752,14 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
   // menu is the keyboard and accessibility path for the same move-card write.
   const drag = useKanbanCardDrag({
     mode: mobile ? "menu" : "drag",
-    enabled: true,
+    enabled: mobile || !filtering,
     cards: board.cards,
     laneIds: board.lanes.map((lane) => lane.id),
     rowRef,
     boardRef,
     ghostRef,
     onMove: (cardId, laneId, beforeCardId) => {
+      if (filtering) return;
       // A move the rules already refuse bounces back with no write; the
       // lane's red marking said why during the drag. A drop inside the source
       // lane is a reorder (and a no-op when it lands where it already was).
@@ -1880,18 +1901,20 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
       id: "move-up",
       label: t("kanban.menuMoveUp"),
       icon: <ChevronIcon direction="up" />,
-      disabled: !previous,
+      disabled: filtering || !previous,
+      disabledTitle: filtering ? t("kanban.searchReorderDisabled") : undefined,
       onSelect: () => {
-        if (previous && kanbanMoveCard(projectDir, menuCard.id, menuCard.laneId, previous.id)) setHighlightFlash(menuCard.id);
+        if (!filtering && previous && kanbanMoveCard(projectDir, menuCard.id, menuCard.laneId, previous.id)) setHighlightFlash(menuCard.id);
       },
     });
     entries.push({
       id: "move-down",
       label: t("kanban.menuMoveDown"),
       icon: <ChevronIcon direction="down" />,
-      disabled: position === laneCards.length - 1,
+      disabled: filtering || position === laneCards.length - 1,
+      disabledTitle: filtering ? t("kanban.searchReorderDisabled") : undefined,
       onSelect: () => {
-        if (kanbanMoveCard(projectDir, menuCard.id, menuCard.laneId, twoDown?.id ?? null)) setHighlightFlash(menuCard.id);
+        if (!filtering && kanbanMoveCard(projectDir, menuCard.id, menuCard.laneId, twoDown?.id ?? null)) setHighlightFlash(menuCard.id);
       },
     });
     // "Move to {lane}" for every other lane: the accessible (and keyboard)
@@ -1926,13 +1949,14 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
       },
     });
     return entries;
-  }, [menuCard, board, sessionIds, sessionOptions, menuFor, projectDir, t, onOpenSession, onStartSession, openForm, setHighlightFlash]);
+  }, [menuCard, board, sessionIds, sessionOptions, menuFor, projectDir, t, onOpenSession, onStartSession, openForm, setHighlightFlash, filtering]);
 
   const dragView = drag.view;
 
   return (
     <div
       ref={boardRef}
+      className="kanban-board"
       onClickCapture={drag.onClickCapture}
       onPointerDownCapture={drag.onPointerDownCapture}
       style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg)", minWidth: 0, position: "relative" }}
@@ -1950,26 +1974,21 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
           [data-kanban-card] { animation: none; }
         }
       `}</style>
-      <header style={{
-        flexShrink: 0,
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        height: 40,
-        padding: "0 12px",
-        background: "var(--bg-panel)",
-        borderBottom: "1px solid var(--border)",
-      }}>
-        <KanbanIcon size={15} style={{ color: "var(--accent)" }} />
-        <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "50%" }} title={projectName}>
-          {projectName}
-        </span>
-        <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0 }}>
-          {t("kanban.boardTasks", { count: board.cards.length })}
-        </span>
-        <span style={{ flex: 1 }} />
+      <KanbanSearchStyles />
+      <header className="kanban-board-header">
+        <div className="kanban-board-heading">
+          <KanbanIcon size={15} style={{ color: "var(--accent)" }} />
+          <span className="kanban-board-name" title={projectName}>{projectName}</span>
+          <span className="kanban-board-count" data-kanban-board-summary role="status" aria-atomic="true">
+            {filtering ? t("kanban.searchCount", { matched: search.matched, total: search.total }) : t("kanban.boardTasks", { count: search.total })}
+          </span>
+        </div>
+        <KanbanSearchField query={query} onQueryChange={onQueryChange} inputRef={searchInputRef} />
         <button
           type="button"
+          className="kanban-board-configure"
+          aria-label={t("kanban.boardConfigure")}
+          title={t("kanban.boardConfigure")}
           onClick={() => setConfigOpen(true)}
           style={{
             display: "inline-flex",
@@ -1997,10 +2016,16 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
         </button>
       </header>
       {notice}
+      {filtering && <div className="kanban-search-note">{t("kanban.searchReorderDisabled")}</div>}
+      {filtering && search.matched === 0 && (
+        <div data-kanban-no-results className="kanban-search-empty">
+          {t("kanban.searchNoResults")} <button type="button" className="kanban-search-link" onClick={clearSearch}>{t("kanban.searchClear")}</button>
+        </div>
+      )}
       {mobile && activeMobileLane && (
         <div style={{ flexShrink: 0, display: "flex", gap: 6, padding: "8px 12px 0", overflowX: "auto", scrollbarWidth: "none" }}>
-          {board.lanes.map((lane) => {
-            const count = cardsOfLane(board, lane.id).length;
+          {search.lanes.map(({ lane, cards, total }) => {
+            const count = cards.length;
             const active = lane.id === activeMobileLane;
             return (
               <button
@@ -2025,7 +2050,7 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
                 }}
               >
                 {lane.name}
-                {count > 0 && <span style={{ fontSize: 10, color: active ? "var(--accent)" : "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{count}</span>}
+                {(filtering || count > 0) && <span style={{ fontSize: 10, color: active ? "var(--accent)" : "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{filtering ? `${count}/${total}` : count}</span>}
               </button>
             );
           })}
@@ -2044,7 +2069,9 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
           padding: "12px 12px 12px",
         }}
       >
-        {board.lanes.filter((lane) => !mobile || lane.id === activeMobileLane).map((lane) => {
+        {search.lanes.filter(({ lane }) => !mobile || lane.id === activeMobileLane).map((laneSearch) => {
+          const { lane } = laneSearch;
+          const matchingLane = search.lanes.find((entry) => entry.cards.length > 0 && entry.lane.id !== lane.id)?.lane;
           const laneIndex = board.lanes.findIndex((l) => l.id === lane.id);
           // From pick-up, every lane the move-card rules refuse for the card
           // in flight shows itself undroppable (the source lane excepted —
@@ -2055,7 +2082,10 @@ function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; not
           <Fragment key={lane.id}>
             {laneLineBefore === laneIndex && <ColumnDropLine />}
           <LaneColumn
-            board={board}
+            search={laneSearch}
+            query={query}
+            matchingLane={matchingLane}
+            onShowMatchingLane={() => { if (matchingLane) setMobileLaneId(matchingLane.id); }}
             projectDir={projectDir}
             lane={lane}
             isLast={laneIndex === board.lanes.length - 1}
