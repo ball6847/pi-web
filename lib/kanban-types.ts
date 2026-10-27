@@ -39,8 +39,34 @@ export interface KanbanBoard {
   cards: KanbanCard[];
 }
 
+/**
+ * One entry of a card's comment thread: the note a person or a session leaves
+ * for whoever works the card next. Kept in its own table (never on the card
+ * row), read per card, and never part of the board payload.
+ */
+export interface KanbanComment {
+  id: string;
+  cardId: string;
+  /** Who wrote it: the person in the browser, or the agent of a pi session. */
+  author: "user" | "agent";
+  /** The writing session, for an agent entry. */
+  sessionId: string | null;
+  sessionTitle: string | null;
+  body: string;
+  createdAt: number;
+}
+
+/** What `GET /api/kanban/comments` answers: one card's thread, oldest first. */
+export interface KanbanCommentsResponse {
+  cardId: string;
+  comments: KanbanComment[];
+  /** Every entry of the card, including the ones this page left out. */
+  total: number;
+  revision: number;
+}
+
 /** The SQLite board file's schema stamp (`PRAGMA user_version`). */
-export const KANBAN_SCHEMA_VERSION = 2;
+export const KANBAN_SCHEMA_VERSION = 3;
 
 /**
  * The last version the replaced JSON storage wrote. Its files are frozen at 1
@@ -117,6 +143,19 @@ export type KanbanAction =
   | { action: "move-lane"; laneId: string; direction: -1 | 1 }
   | { action: "reorder-lane"; laneId: string; toIndex: number }
   | { action: "delete-lane"; laneId: string };
+
+/**
+ * A write about a card's comments. It is deliberately NOT a `KanbanAction`: a
+ * comment is not a row of the board, the shared reducers never see it, and the
+ * store writes the comment table in the same lock and transaction as the board
+ * (plus one revision bump), so both kinds of write share one queue.
+ */
+export type KanbanCommentAction =
+  | { action: "add-comment"; cardId: string; body: string }
+  | { action: "delete-comment"; commentId: string };
+
+/** Everything `POST /api/kanban` accepts. */
+export type KanbanRequest = KanbanAction | KanbanCommentAction;
 
 export type KanbanActionName = KanbanAction["action"];
 

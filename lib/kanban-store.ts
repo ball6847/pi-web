@@ -4,8 +4,11 @@ import type { DatabaseSync } from "node:sqlite";
 import lockfile from "proper-lockfile";
 import { serializeByKey } from "./key-serializer";
 import {
+  bumpRevision,
   closeKanbanDatabase,
+  deleteCardComment,
   freshBoard,
+  insertCardComment,
   initializeBoard,
   inspectKanbanFile,
   inTransaction,
@@ -15,15 +18,27 @@ import {
   openKanbanDatabase,
   readBoardRevision,
   readBoardRows,
+  readCardComments,
   writeBoardRows,
   type KanbanSnapshot,
 } from "./kanban-data";
 import { applyKanbanAction, attachSessionCard, pruneDeadLinks, type KanbanSessionCardPick } from "./kanban-shared";
 import {
-  applyKanbanToolMutation, kanbanToolMutationResult, kanbanToolOverview, kanbanToolRead, kanbanToolSearch, parseKanbanToolRequest,
-  type KanbanToolActor, type KanbanToolResult,
+  applyKanbanToolMutation, kanbanToolCommentResult, kanbanToolMutationResult, kanbanToolOverview, kanbanToolRead, kanbanToolSearch,
+  parseKanbanToolRequest, resolveKanbanToolCard,
+  type KanbanToolActor, type KanbanToolComment, type KanbanToolResult,
 } from "./kanban-tool-domain";
-import { KANBAN_JSON_SCHEMA_VERSION, KANBAN_SCHEMA_VERSION, makeKanbanId, type KanbanAction, type KanbanBoard, type KanbanCard } from "./kanban-types";
+import { KANBAN_COMMENT_PAGE_LIMIT } from "./kanban-tool-limits";
+import {
+  KANBAN_JSON_SCHEMA_VERSION,
+  KANBAN_SCHEMA_VERSION,
+  makeKanbanId,
+  type KanbanAction,
+  type KanbanBoard,
+  type KanbanCard,
+  type KanbanComment,
+  type KanbanRequest,
+} from "./kanban-types";
 import { isMcpEntryRefusal, validateMcpProject } from "./mcp-entry-request";
 import { readRegularFileText } from "./regular-file";
 import { invalidateSessionPathCache, readSessionHeader, resolveSessionPath } from "./session-reader";
@@ -546,7 +561,10 @@ function backUpUnusableBoard(path: string): void {
 // Locked read-modify-write
 // ---------------------------------------------------------------------------
 
-type EditResult = { board: KanbanBoard } | KanbanFailure;
+/** A comment write made in the same lock and transaction as the board write. */
+type CommentWrite = { kind: "add"; comment: KanbanComment } | { kind: "delete"; commentId: string };
+
+type EditResult = { board: KanbanBoard; comments?: CommentWrite[] } | KanbanFailure;
 
 /**
  * Under the in-process queue and the file's lock: opens the board (a missing
@@ -588,10 +606,22 @@ async function editBoard(
         // browser's existing materializing-refusal behavior remains the default.
         if ("ok" in result && options.materializeRefused === false) return result;
         const next = "board" in result ? result.board : board;
+        const commentWrites = "board" in result ? result.comments ?? [] : [];
         let db: DatabaseSync;
         if (opened.kind === "ready") {
           db = opened.db;
-          if (next !== board) inTransaction(db, () => writeBoardRows(db, next));
+          if (next !== board || commentWrites.length > 0) {
+            inTransaction(db, () => {
+              // One revision bump covers both: a comment is as much a change the
+              // other clients must see as a card move is.
+              if (next !== board) writeBoardRows(db, next);
+              for (const write of commentWrites) {
+                if (write.kind === "add") insertCardComment(db, write.comment);
+                else deleteCardComment(db, write.commentId);
+              }
+              if (next === board) bumpRevision(db);
+            });
+          }
         } else {
           if (opened.kind === "corrupt") backUpUnusableBoard(path);
           db = opened.kind === "empty" ? opened.db : (createdDb = openKanbanDatabase(path, { timeout: DB_TIMEOUT_MS }));
@@ -694,20 +724,45 @@ export async function executeKanbanToolRequest(
       if (!snapshot.ok) return snapshot;
       // Reads are projections: the overview and search rows never carry card bodies.
       if (request.action === "search") return kanbanToolSearch(snapshot.board, snapshot.revision, actor.sessionId, request);
-      return request.cardId === undefined
-        ? kanbanToolOverview(snapshot.board, snapshot.revision, actor.sessionId)
-        : kanbanToolRead(snapshot.board, snapshot.revision, actor.sessionId, request.cardId);
+      if (request.cardId === undefined) return kanbanToolOverview(snapshot.board, snapshot.revision, actor.sessionId);
+      // One card's thread is read through its own (bounded) query: a card read
+      // never pulls the whole board's comments, and the overview pulls none.
+      const thread = await readCardCommentsFor(valid.cwd, request.cardId);
+      const comments = thread.ok ? { comments: thread.comments, total: thread.total } : { comments: [], total: 0 };
+      return kanbanToolRead(snapshot.board, snapshot.revision, actor.sessionId, request.cardId, comments);
     }
     let cardId = "";
+    let written: KanbanComment | null = null;
     const edited = await editBoard(projectRoot, async (board, now) => {
       // Session files can disappear while waiting for the lock, too.
       if (!(await validateSession(projectRoot, actor.sessionId))) return failure("session-missing", "The executing session no longer exists in this project.");
-      const next = applyKanbanToolMutation(board, request, actor, now, makeKanbanId());
+      if (request.action === "comment") {
+        const target = resolveKanbanToolCard(board, request.cardId, actor);
+        if (!target.ok) return target;
+        cardId = target.card.id;
+        written = {
+          id: makeKanbanId(),
+          cardId: target.card.id,
+          author: "agent",
+          sessionId: actor.sessionId,
+          sessionTitle: actor.sessionTitle ?? null,
+          body: request.body.trim(),
+          createdAt: now,
+        };
+        return { board, comments: [{ kind: "add", comment: written }] };
+      }
+      const next = applyKanbanToolMutation(board, request as Exclude<typeof request, KanbanToolComment>, actor, now, makeKanbanId());
       if (!next.ok) return next;
       cardId = next.cardId;
       return { board: next.board };
     }, { signal, materializeRefused: false });
-    return edited.ok ? kanbanToolMutationResult(edited.board, edited.revision, actor.sessionId, cardId, request.action) : edited;
+    if (!edited.ok) return edited;
+    if (request.action === "comment") {
+      return written
+        ? kanbanToolCommentResult(edited.board, edited.revision, actor.sessionId, cardId, written)
+        : failure("internal", "The comment was not written");
+    }
+    return kanbanToolMutationResult(edited.board, edited.revision, actor.sessionId, cardId, request.action);
   } catch (error) {
     return toFailure(error);
   }
@@ -744,16 +799,79 @@ export async function attachNewSessionCard(
 }
 
 /**
+ * One card's comments, oldest first: the detail tab's own read. Never creating,
+ * never pruning — a board that has none answers empty (revision 0) — and kept
+ * out of `GET /api/kanban` so the board payload and its poll stay small.
+ */
+export async function readCardCommentsFor(
+  cwd: string,
+  cardId: string,
+  limit = KANBAN_COMMENT_PAGE_LIMIT,
+): Promise<{ ok: true; comments: KanbanComment[]; total: number; revision: number } | KanbanFailure> {
+  const valid = await validateKanbanCwd(cwd);
+  if (!valid.ok) return valid;
+  const projectRoot = await boardProjectRoot(valid.cwd);
+  const path = kanbanBoardPath(projectRoot);
+  try {
+    const opened = openBoard(path, projectRoot);
+    if (opened.kind === "newer") {
+      closeOpened(opened);
+      throw new KanbanSchemaError(unsupportedSchemaMessage(opened.version));
+    }
+    if (opened.kind !== "ready") {
+      closeOpened(opened);
+      return { ok: true, comments: [], total: 0, revision: 0 };
+    }
+    try {
+      const { comments, total } = readCardComments(opened.db, cardId, limit);
+      return { ok: true, comments, total, revision: opened.snapshot.revision };
+    } finally {
+      closeOpened(opened);
+    }
+  } catch (error) {
+    return toFailure(error);
+  }
+}
+
+/** A person's note on a card: the browser's half of the thread. */
+async function addCommentMutation(projectRoot: string, action: { cardId: string; body: string }): Promise<KanbanBoardResult> {
+  return editBoard(projectRoot, async (board, now) => {
+    if (!board.cards.some((card) => card.id === action.cardId)) {
+      return failure("refused", "That card is no longer on the board");
+    }
+    const comment: KanbanComment = {
+      id: makeKanbanId(),
+      cardId: action.cardId,
+      author: "user",
+      sessionId: null,
+      sessionTitle: null,
+      body: action.body.trim(),
+      createdAt: now,
+    };
+    return { board, comments: [{ kind: "add", comment }] };
+  });
+}
+
+/** Removing a note. An id that is already gone is not a failure: two tabs race. */
+async function deleteCommentMutation(projectRoot: string, action: { commentId: string }): Promise<KanbanBoardResult> {
+  return editBoard(projectRoot, async (board) => ({ board, comments: [{ kind: "delete", commentId: action.commentId }] }));
+}
+
+/**
  * One browser mutation: the folder is checked, a session the action links must
  * exist (`session-missing`), then under the lock the reducer runs on the fresh
  * board. Dead links are pruned and the result written in one transaction. A
- * refusal writes nothing but a newly materialized file.
+ * comment write shares that lock and transaction (and its one revision bump),
+ * but changes no row of the board. A refusal writes nothing but a newly
+ * materialized file.
  */
-export async function applyMutation(cwd: string, action: KanbanAction): Promise<KanbanBoardResult> {
+export async function applyMutation(cwd: string, action: KanbanRequest): Promise<KanbanBoardResult> {
   const valid = await validateKanbanCwd(cwd);
   if (!valid.ok) return valid;
   const projectRoot = await boardProjectRoot(valid.cwd);
   try {
+    if (action.action === "add-comment") return await addCommentMutation(projectRoot, action);
+    if (action.action === "delete-comment") return await deleteCommentMutation(projectRoot, action);
     const sessionId = actionSessionId(action);
     if (sessionId !== null && !(await validateSession(projectRoot, sessionId))) {
       return failure("session-missing", "That session does not exist in this project");

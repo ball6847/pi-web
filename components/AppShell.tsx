@@ -40,6 +40,7 @@ import { SystemPromptPanel } from "./SystemPromptPanel";
 import { ToolDefinitionsPanel } from "./ToolDefinitionsPanel";
 import { AgentSessionPanel } from "./AgentSessionPanel";
 import { SubagentViewer } from "./SubagentViewer";
+import { KanbanCardDetail } from "./KanbanCardDetail";
 import { TerminalPanel } from "./TerminalPanel";
 import { newTerminalTab, restoreTerminalTabs, TERMINAL_TABS_KEY, type TerminalTab } from "./terminal-tab-state";
 import { useTheme } from "@/hooks/useTheme";
@@ -114,6 +115,19 @@ const TOOL_END_REFRESH_MS = 1000;
 
 function parkedNewSessionDraftKey(cwd: string): string {
   return `parked-new:${cwd}`;
+}
+
+/**
+ * A card detail tab: an existing card (`cardId`), or a new card's draft
+ * (`cardId: null`, saved into `draftLaneId`) that becomes a real tab on Save.
+ */
+interface KanbanCardTab {
+  id: string;
+  cardId: string | null;
+  draftLaneId: string | null;
+  /** The board (resolved project root) the card belongs to. */
+  projectDir: string;
+  label: string;
 }
 
 /** Panel tab id of the last sub-agent tab, or null when there is none. */
@@ -598,6 +612,14 @@ export function AppShell() {
   // they are dropped when the project changes (they belong to its sessions).
   const [agentTabs, setAgentTabs] = useState<{ sessionId: string; label: string }[]>([]);
   /**
+   * Card detail tabs: a card is opened as itself in the right panel (the board
+   * links to it, never to a modal), and a lane's "+" opens the same view as a
+   * draft. Like subagent tabs they are transient page memory, dropped when the
+   * project changes: a card id belongs to one project's board.
+   */
+  const [cardTabs, setCardTabs] = useState<KanbanCardTab[]>([]);
+  const cardTabSeq = useRef(0);
+  /**
    * The sub-agent row the agent switcher must focus after a hand-over from the
    * read-only viewer. `nonce` re-fires the focus when the same row is asked for
    * twice; the panel opens for it and AppShell clears it once the panel closes.
@@ -617,6 +639,13 @@ export function AppShell() {
       label: tab.label,
       filePath: tab.label,
       kind: "agent" as const,
+    })),
+    ...cardTabs.map((tab) => ({
+      id: tab.id,
+      label: tab.label,
+      // No file: the viewer's branch keys off a file path, and a card is not one.
+      filePath: "",
+      kind: "card" as const,
     })),
   ];
 
@@ -667,8 +696,9 @@ export function AppShell() {
     fileWorkspaceGenerationRef.current += 1;
     setFileWorkspaceGeneration(fileWorkspaceGenerationRef.current);
     setFileTabs(next.tabs);
-    // Subagent tabs belong to the previous project's sessions: dropped, not parked.
+    // Subagent and card tabs belong to the previous project: dropped, not parked.
     setAgentTabs([]);
+    setCardTabs([]);
     // Terminal tabs span workspaces and keep control of the panel while active.
     if (!activeFileTabId || activeFileId || activeFileTabId.startsWith("agent:")) {
       setActiveFileTabId(next.activeTabId);
@@ -1337,6 +1367,43 @@ export function AppShell() {
     if (isMobile) setSidebarOpen(false);
   }, [terminalTabs, isMobile]);
 
+  /**
+   * A card, opened in the right panel. The board's cards, the lane's "+" and a
+   * chat strip's card all land here, so a card has one destination: its own
+   * tab. Opening a card that already has a tab focuses it instead of a second.
+   */
+  const handleOpenKanbanCard = useCallback((projectDir: string, cardId: string, label: string) => {
+    const id = `card:${cardId}`;
+    setCardTabs((prev) => (prev.some((tab) => tab.id === id) ? prev : [...prev, { id, cardId, draftLaneId: null, projectDir, label }]));
+    setActiveFileTabId(id);
+    setRightPanelOpen(true);
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
+  /** A lane's "+": a new card is written in the same view a card is read in. */
+  const handleNewKanbanCard = useCallback((projectDir: string, laneId: string) => {
+    cardTabSeq.current += 1;
+    const id = `card:draft:${cardTabSeq.current}`;
+    setCardTabs((prev) => [...prev, { id, cardId: null, draftLaneId: laneId, projectDir, label: translate("kanban.detailDraftTitle") }]);
+    setActiveFileTabId(id);
+    setRightPanelOpen(true);
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile, translate]);
+
+  /** A draft was saved: the same tab becomes that card's, so nothing blinks. */
+  const handleKanbanCardCreated = useCallback((tabId: string, cardId: string, label: string) => {
+    const nextId = `card:${cardId}`;
+    setCardTabs((prev) => prev.map((tab) => (tab.id === tabId ? { ...tab, id: nextId, cardId, label } : tab)));
+    setActiveFileTabId((current) => (current === tabId ? nextId : current));
+  }, []);
+
+  /** The card's title moved (edited here or by the agent): the tab's label follows. */
+  const handleKanbanCardTitle = useCallback((tabId: string, label: string) => {
+    setCardTabs((prev) => (prev.some((tab) => tab.id === tabId && tab.label !== label)
+      ? prev.map((tab) => (tab.id === tabId ? { ...tab, label } : tab))
+      : prev));
+  }, []);
+
   // Subagent work opens in a right-panel tab instead of hijacking the main chat.
   const handleOpenSubagentTab = useCallback((sessionId: string, label: string) => {
     setAgentTabs((prev) => prev.some((tab) => tab.sessionId === sessionId) ? prev : [...prev, { sessionId, label }]);
@@ -1375,27 +1442,39 @@ export function AppShell() {
       setTerminalTabs((tabs) => tabs.map((tab) => tab.id === tabId && !tab.closing ? { ...tab, closing: "close" } : tab));
       return;
     }
+    if (tabId.startsWith("card:")) {
+      // A draft closes with nothing written; a card tab closes alone, the board
+      // and the card are untouched.
+      const remainingCards = cardTabs.filter((tab) => tab.id !== tabId);
+      setCardTabs(remainingCards);
+      setActiveFileTabId((cur) => {
+        if (cur !== tabId) return cur;
+        return fileTabs.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastAgentTabId(agentTabs) ?? remainingCards.at(-1)?.id ?? null;
+      });
+      if (fileTabs.length === 0 && terminalTabs.length === 0 && agentTabs.length === 0 && remainingCards.length === 0) setRightPanelOpen(false);
+      return;
+    }
     if (tabId.startsWith("agent:")) {
       const remainingAgents = agentTabs.filter((tab) => `agent:${tab.sessionId}` !== tabId);
       setAgentTabs(remainingAgents);
       setActiveFileTabId((cur) => {
         if (cur !== tabId) return cur;
-        return fileTabs.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastAgentTabId(remainingAgents);
+        return fileTabs.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastAgentTabId(remainingAgents) ?? cardTabs.at(-1)?.id ?? null;
       });
-      if (fileTabs.length === 0 && terminalTabs.length === 0 && remainingAgents.length === 0) setRightPanelOpen(false);
+      if (fileTabs.length === 0 && terminalTabs.length === 0 && remainingAgents.length === 0 && cardTabs.length === 0) setRightPanelOpen(false);
       return;
     }
     setFileTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
-      if (next.length === 0 && terminalTabs.length === 0 && agentTabs.length === 0) setRightPanelOpen(false);
+      if (next.length === 0 && terminalTabs.length === 0 && agentTabs.length === 0 && cardTabs.length === 0) setRightPanelOpen(false);
       return next;
     });
     setActiveFileTabId((cur) => {
       if (cur !== tabId) return cur;
       const remaining = fileTabs.filter((t) => t.id !== tabId);
-      return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastAgentTabId(agentTabs);
+      return remaining.at(-1)?.id ?? terminalTabs.at(-1)?.id ?? lastAgentTabId(agentTabs) ?? cardTabs.at(-1)?.id ?? null;
     });
-  }, [fileTabs, terminalTabs, agentTabs]);
+  }, [fileTabs, terminalTabs, agentTabs, cardTabs]);
 
   const handleViewFullHistory = useCallback(() => {
     if (!selectedSession) return;
@@ -1749,6 +1828,13 @@ export function AppShell() {
   const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
   // Subagent work tabs: like files, only the active one is mounted.
   const activeAgentTab = agentTabs.find((tab) => `agent:${tab.sessionId}` === activeFileTabId) ?? null;
+  const activeCardTab = cardTabs.find((tab) => tab.id === activeFileTabId) ?? null;
+  // The card's own project's sessions: a card tab can outlive a move to another
+  // project's chat, and its session picker must list the right ones.
+  const activeCardTabSessions = useMemo(
+    () => sessionsForKanbanBoard(sessionsWithSelection, activeCardTab?.projectDir ?? null),
+    [activeCardTab?.projectDir, sessionsWithSelection],
+  );
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
 
@@ -3054,6 +3140,8 @@ export function AppShell() {
                   highlightCardId={boardHighlightCardId}
                   onOpenSession={handleKanbanOpenSession}
                   onStartSession={handleKanbanStartSession}
+                  onOpenCard={(cardId, title) => handleOpenKanbanCard(boardProjectDir, cardId, title)}
+                  onNewCard={(laneId) => handleNewKanbanCard(boardProjectDir, laneId)}
                 />
               </div>
             ) : null}
@@ -3213,7 +3301,7 @@ export function AppShell() {
                 { sourceSessionId: activeFileTab.sourceSessionId, page },
               )}
             />
-          ) : !terminalTabs.some((tab) => tab.id === activeFileTabId) && !activeAgentTab ? (
+          ) : !terminalTabs.some((tab) => tab.id === activeFileTabId) && !activeAgentTab && !activeCardTab ? (
             <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
                {translate("files.noneOpen")}
             </div>
@@ -3237,6 +3325,25 @@ export function AppShell() {
               running={runningSessionIds.has(activeAgentTab.sessionId)}
               onOpenFile={handleOpenLinkedFile}
               onOpenParentChat={handleOpenSubagentParentChat}
+            />
+          )}
+          {activeCardTab && (
+            <KanbanCardDetail
+              key={activeCardTab.id}
+              projectDir={activeCardTab.projectDir}
+              projectName={getFileName(activeCardTab.projectDir) || activeCardTab.projectDir}
+              cardId={activeCardTab.cardId}
+              draftLaneId={activeCardTab.draftLaneId}
+              sessions={activeCardTabSessions}
+              runningSessionIds={runningSessionIds}
+              awaitingInputSessionIds={awaitingInputSessionIds}
+              unreadSessionIds={unreadSessionIds}
+              onOpenSession={handleKanbanOpenSession}
+              onStartSession={handleKanbanStartSession}
+              onCardCreated={(cardId, title) => handleKanbanCardCreated(activeCardTab.id, cardId, title)}
+              onCardDeleted={() => handleCloseFileTab(activeCardTab.id)}
+              onTitleChange={(title) => handleKanbanCardTitle(activeCardTab.id, title)}
+              onOpenFile={handleOpenLinkedFile}
             />
           )}
         </div>
