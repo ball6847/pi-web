@@ -230,7 +230,12 @@ async function resolveProjectUncached(cwd: string): Promise<ProjectInfo> {
     // A transient failure propagates so resolveProject keeps it out of the
     // cache; whatever git itself answered is this folder's identity for now.
     if (isTransientGitError(error)) throw error;
-    info = { projectRoot: cwd, branch: null, isWorktree: false, isTopLevel: false };
+    // A leftover directory under `<repo>-worktrees` is the other way a worktree
+    // stops being one: `git worktree remove` can delete the admin entry and
+    // leave the folder (an untracked file refuses the removal), so git answers
+    // "not a git repository" for a path that exists. Its sessions still belong
+    // to the repository — the same inference a vanished worktree gets.
+    info = inferRemovedWorktree(cwd) ?? { projectRoot: cwd, branch: null, isWorktree: false, isTopLevel: false };
   }
 
   return info;
