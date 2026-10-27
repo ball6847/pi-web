@@ -2,7 +2,14 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { KANBAN_SCHEMA_VERSION, defaultLanes, type KanbanBoard, type KanbanCard, type KanbanLane } from "./kanban-types";
+import {
+  KANBAN_SCHEMA_VERSION,
+  defaultLanes,
+  type KanbanBoard,
+  type KanbanCard,
+  type KanbanComment,
+  type KanbanLane,
+} from "./kanban-types";
 
 // SERVER-ONLY. The one place a kanban board touches disk: the SQLite board
 // file of a project root, its schema, and the row <-> `KanbanBoard` mapping.
@@ -56,10 +63,25 @@ CREATE TABLE cards (
   updated_at    INTEGER NOT NULL
 ) STRICT;
 
+-- A card's comments: the handoff trail between people and sessions. No foreign
+-- key on purpose: the board's writes replace the cards wholesale, and an
+-- ON DELETE CASCADE would take the thread with it on every unrelated edit. The
+-- writer prunes rows whose card is gone, in the same transaction.
+CREATE TABLE card_comments (
+  id            TEXT PRIMARY KEY,
+  card_id       TEXT NOT NULL,
+  author        TEXT NOT NULL,
+  session_id    TEXT,
+  session_title TEXT,
+  body          TEXT NOT NULL,
+  created_at    INTEGER NOT NULL
+) STRICT;
+
 -- One card per session, the board's own rule, now enforced by the file too.
 CREATE UNIQUE INDEX cards_session ON cards(session_id) WHERE session_id IS NOT NULL;
 CREATE INDEX cards_lane ON cards(lane_id, position);
 CREATE INDEX cards_updated ON cards(updated_at);
+CREATE INDEX card_comments_card ON card_comments(card_id, created_at);
 `;
 
 /** The agent directory's file name of a board. */
@@ -185,6 +207,19 @@ function tableCount(db: DatabaseSync): number {
 const MIGRATIONS: Record<number, string[]> = {
   // v1 -> v2: lanes gain the model-facing instructions.
   1: ["ALTER TABLE lanes ADD COLUMN instructions TEXT NOT NULL DEFAULT ''"],
+  // v2 -> v3: card comments (a new table, so no existing row changes).
+  2: [
+    `CREATE TABLE card_comments (
+      id            TEXT PRIMARY KEY,
+      card_id       TEXT NOT NULL,
+      author        TEXT NOT NULL,
+      session_id    TEXT,
+      session_title TEXT,
+      body          TEXT NOT NULL,
+      created_at    INTEGER NOT NULL
+    ) STRICT`,
+    "CREATE INDEX card_comments_card ON card_comments(card_id, created_at)",
+  ],
 };
 
 /**
@@ -291,6 +326,28 @@ interface CardRow {
   updated_at: number;
 }
 
+interface CommentRow {
+  id: string;
+  card_id: string;
+  author: string;
+  session_id: string | null;
+  session_title: string | null;
+  body: string;
+  created_at: number;
+}
+
+function toComment(row: CommentRow): KanbanComment {
+  return {
+    id: row.id,
+    cardId: row.card_id,
+    author: row.author === "agent" ? "agent" : "user",
+    sessionId: row.session_id || null,
+    sessionTitle: row.session_title,
+    body: row.body,
+    createdAt: Number(row.created_at),
+  };
+}
+
 function toLane(row: LaneRow): KanbanLane {
   const lane: KanbanLane = { id: row.id, name: row.name, description: row.description };
   // Absent when empty, so an untouched board's lanes keep their old shape.
@@ -379,9 +436,51 @@ export function writeBoardRows(db: DatabaseSync, board: KanbanBoard): number {
   for (const [position, entry] of board.cards.entries()) {
     card.run(entry.id, position, entry.laneId, entry.title, entry.description, entry.sessionId, entry.sessionTitle, entry.createdAt, entry.updatedAt);
   }
+  // A card that is gone takes its thread: the one cleanup rule, applied where
+  // the board is written (a comment is never a row of `cards`).
+  db.exec("DELETE FROM card_comments WHERE card_id NOT IN (SELECT id FROM cards)");
+  return bumpRevision(db);
+}
+
+/** Advances the revision by one: the poll's whole signal that something changed. */
+export function bumpRevision(db: DatabaseSync): number {
   const revision = readBoardRevision(db) + 1;
   db.prepare("INSERT INTO meta (key, value) VALUES ('revision', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(revision));
   return revision;
+}
+
+// ---------------------------------------------------------------------------
+// Comments
+// ---------------------------------------------------------------------------
+
+/**
+ * One card's comments, oldest first. `limit` keeps the newest rows (the thread
+ * reads top-down, so a page holds its tail); `total` counts them all.
+ */
+export function readCardComments(
+  db: DatabaseSync,
+  cardId: string,
+  limit = 100,
+): { comments: KanbanComment[]; total: number } {
+  const total = db.prepare("SELECT count(*) AS n FROM card_comments WHERE card_id = ?").get(cardId) as { n?: number } | undefined;
+  const rows = db
+    .prepare("SELECT id, card_id, author, session_id, session_title, body, created_at FROM card_comments WHERE card_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?")
+    .all(cardId, Math.max(1, Math.trunc(limit))) as unknown as CommentRow[];
+  return { comments: rows.map(toComment).reverse(), total: Number(total?.n ?? 0) };
+}
+
+export function insertCardComment(db: DatabaseSync, comment: KanbanComment): void {
+  db.prepare(
+    "INSERT INTO card_comments (id, card_id, author, session_id, session_title, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(comment.id, comment.cardId, comment.author, comment.sessionId, comment.sessionTitle, comment.body, comment.createdAt);
+}
+
+/** Deletes one comment; the card it belonged to, or null when it was already gone. */
+export function deleteCardComment(db: DatabaseSync, commentId: string): string | null {
+  const row = db.prepare("SELECT card_id FROM card_comments WHERE id = ?").get(commentId) as { card_id?: string } | undefined;
+  if (!row?.card_id) return null;
+  db.prepare("DELETE FROM card_comments WHERE id = ?").run(commentId);
+  return row.card_id;
 }
 
 /**

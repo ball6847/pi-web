@@ -1,22 +1,34 @@
 import { cardForSession, moveCardToLane } from "./kanban-shared";
 import { cardMatchesQuery, kanbanDescriptionExcerpt } from "./kanban-search";
-import { KANBAN_CARD_EXCERPT_BUDGET, KANBAN_SEARCH_DEFAULT_LIMIT, KANBAN_SEARCH_MAX_LIMIT } from "./kanban-tool-limits";
+import {
+  KANBAN_CARD_EXCERPT_BUDGET,
+  KANBAN_COMMENT_BUDGET,
+  KANBAN_COMMENT_MAX,
+  KANBAN_COMMENT_READ_LIMIT,
+  KANBAN_SEARCH_DEFAULT_LIMIT,
+  KANBAN_SEARCH_MAX_LIMIT,
+} from "./kanban-tool-limits";
 import type { KanbanFailureCode } from "./kanban-store";
-import type { KanbanBoard, KanbanCard, KanbanLane } from "./kanban-types";
+import type { KanbanBoard, KanbanCard, KanbanComment, KanbanLane } from "./kanban-types";
 
 /** Agent requests are deliberately separate from the browser's link-stealing actions. */
 export type KanbanToolRequest =
   | { action: "read"; cardId?: string }
   | { action: "search"; query?: string; laneId?: string; limit?: number }
   | { action: "create"; title: string; description?: string; laneId?: string }
-  | { action: "update"; cardId?: string; title?: string; description?: string; laneId?: string };
+  | { action: "update"; cardId?: string; title?: string; description?: string; laneId?: string }
+  | { action: "comment"; cardId?: string; body: string };
 export type KanbanToolSearch = Extract<KanbanToolRequest, { action: "search" }>;
-export type KanbanToolMutation = Exclude<KanbanToolRequest, { action: "read" | "search" }>;
+/** Board edits: the shared reducers' business. A comment is not a board row. */
+export type KanbanToolMutation = Extract<KanbanToolRequest, { action: "create" | "update" }>;
+export type KanbanToolComment = Extract<KanbanToolRequest, { action: "comment" }>;
 export type KanbanToolActor = { sessionId: string; sessionTitle?: string | null };
 export type KanbanToolFailure = { ok: false; code: KanbanFailureCode | "invalid-request" | "read-only"; error: string };
 // Mapped data types also satisfy Pi's JsonValue contract (interfaces have no index signature).
 type CardData = { [K in keyof KanbanCard]: KanbanCard[K] };
 type LaneData = { [K in keyof KanbanLane]: KanbanLane[K] };
+/** One comment as a card read sends it: the head of a long note, never the whole thread. */
+type CommentData = { [K in keyof KanbanComment]: KanbanComment[K] };
 /** A lane without its cards: enough to choose one, cheap enough to always send. */
 export type KanbanLaneOverviewData = { id: string; name: string; description: string; fixed?: boolean; cardCount: number };
 /** One search hit: no id-less body, just the field a model picks a card with. */
@@ -33,6 +45,19 @@ export type KanbanToolResult = KanbanToolFailure | {
   ok: true;
   action: "read";
   projectDir: string;
+  card: CardData;
+  lane: LaneData;
+  nextLaneId: string | null;
+  currentCardId: string | null;
+  revision: number;
+  /** The newest entries, oldest first, each body bounded; `commentCount` counts them all. */
+  comments: CommentData[];
+  commentCount: number;
+} | {
+  ok: true;
+  action: "comment";
+  projectDir: string;
+  comment: CommentData;
   card: CardData;
   lane: LaneData;
   nextLaneId: string | null;
@@ -65,6 +90,7 @@ const REQUEST_KEYS = {
   search: ["action", "query", "laneId", "limit"],
   create: ["action", "title", "description", "laneId"],
   update: ["action", "cardId", "title", "description", "laneId"],
+  comment: ["action", "cardId", "body"],
 } as const;
 
 /** Do not trust SDK validation alone: nested/programmatic callers must obey the same contract. */
@@ -73,8 +99,8 @@ export function parseKanbanToolRequest(input: unknown): { ok: true; request: Kan
   if (!input || typeof input !== "object" || Array.isArray(input)) return invalid("kanban expects an object with action read, search, create, or update.");
   const raw = input as Record<string, unknown>;
   const action = raw.action;
-  if (action !== "read" && action !== "search" && action !== "create" && action !== "update") {
-    return invalid("action must be read, search, create, or update.");
+  if (action !== "read" && action !== "search" && action !== "create" && action !== "update" && action !== "comment") {
+    return invalid("action must be read, search, create, update, or comment.");
   }
   const keys: readonly string[] = REQUEST_KEYS[action];
   for (const key of Object.keys(raw)) {
@@ -102,11 +128,38 @@ export function parseKanbanToolRequest(input: unknown): { ok: true; request: Kan
   if (action === "update" && !["title", "description", "laneId"].some((key) => Object.hasOwn(raw, key))) {
     return invalid("update requires at least one of title, description, or laneId.");
   }
+  if (action === "comment" && (typeof raw.body !== "string" || !raw.body.trim())) return invalid("comment requires a nonblank body.");
+  if (action === "comment" && typeof raw.body === "string" && [...raw.body].length > KANBAN_COMMENT_MAX) {
+    return invalid(`comment body must be at most ${KANBAN_COMMENT_MAX} characters; put long text in the card's description.`);
+  }
   return { ok: true, request: { ...raw } as KanbanToolRequest };
 }
 
 function refused(error: string): KanbanToolFailure & { code: "refused" } {
   return { ok: false, code: "refused", error };
+}
+
+/**
+ * The card a mutation acts on: an explicit id, or this session's own linked
+ * card. Refused for an unknown card, and for a card another session owns —
+ * a link is never stolen, and a foreign card is never edited. An unlinked card
+ * is fair game (text edits, a claim, a comment).
+ */
+export function resolveKanbanToolCard(
+  board: KanbanBoard,
+  cardId: string | undefined,
+  actor: KanbanToolActor,
+): { ok: true; card: KanbanCard } | (KanbanToolFailure & { code: "refused" }) {
+  const card = cardId === undefined ? cardForSession(board, actor.sessionId) : board.cards.find((c) => c.id === cardId);
+  if (!card) {
+    return refused(cardId === undefined
+      ? "This session has no linked card. Read the board, then specify cardId and a work laneId to claim a free card."
+      : "Card not found in this project's board. Use kanban read to discover current card IDs.");
+  }
+  if (card.sessionId !== null && card.sessionId !== actor.sessionId) {
+    return refused(`Card "${card.id}" belongs to another session. Choose an unlinked card; links cannot be stolen.`);
+  }
+  return { ok: true, card };
 }
 
 /** Pure guarded patch/claim/move. The caller supplies identity/time; never silently drops another link. */
@@ -131,11 +184,9 @@ export function applyKanbanToolMutation(
     };
     return { ok: true, board: { ...board, cards: [...board.cards, card] }, cardId: card.id };
   }
-  const card = request.cardId === undefined ? current : board.cards.find((c) => c.id === request.cardId);
-  if (!card) return refused(request.cardId === undefined
-    ? "This session has no linked card. Read the board, then specify cardId and a work laneId to claim a free card."
-    : "Card not found in this project's board. Use kanban read to discover current card IDs.");
-  if (card.sessionId !== null && card.sessionId !== actor.sessionId) return refused(`Card "${card.id}" belongs to another session. Choose an unlinked card; links cannot be stolen.`);
+  const resolved = resolveKanbanToolCard(board, request.cardId, actor);
+  if (!resolved.ok) return resolved;
+  const card = resolved.card;
   const lane = board.lanes.find((l) => l.id === (request.laneId ?? card.laneId));
   if (!lane) return refused("Lane not found. Use kanban read to discover the current lane IDs.");
   if (lane.fixed && card.sessionId !== null) return refused("A linked card cannot enter Backlog. Keep it in a work lane; create independent tasks in Backlog.");
@@ -211,8 +262,17 @@ export function kanbanToolOverview(board: KanbanBoard, revision: number, session
   };
 }
 
-/** `read { cardId }`: exactly one card, in full, with the lane it sits in. */
-export function kanbanToolRead(board: KanbanBoard, revision: number, sessionId: string, cardId: string): KanbanToolResult {
+/**
+ * `read { cardId }`: exactly one card, in full, with the lane it sits in and the
+ * newest comments (bounded) — the handoff a session needs to pick the work up.
+ */
+export function kanbanToolRead(
+  board: KanbanBoard,
+  revision: number,
+  sessionId: string,
+  cardId: string,
+  comments: { comments: readonly KanbanComment[]; total: number } = { comments: [], total: 0 },
+): KanbanToolResult {
   const card = board.cards.find((c) => c.id === cardId);
   if (!card) return refused("Card not found in this project's board. Use kanban read without cardId, then kanban search, to discover current card IDs.");
   const index = board.lanes.findIndex((l) => l.id === card.laneId);
@@ -226,6 +286,8 @@ export function kanbanToolRead(board: KanbanBoard, revision: number, sessionId: 
     nextLaneId: board.lanes[index + 1]?.id ?? null,
     currentCardId: cardForSession(board, sessionId)?.id ?? null,
     revision,
+    comments: kanbanToolComments(comments.comments),
+    commentCount: comments.total,
   };
 }
 
@@ -253,6 +315,42 @@ export function kanbanToolSearch(board: KanbanBoard, revision: number, sessionId
     total: board.cards.length,
     hasMore,
     ...(hasMore ? { hint: `${cards.length} of ${matched.length} matches shown; narrow with query or laneId, or raise limit (max ${KANBAN_SEARCH_MAX_LIMIT}).` } : {}),
+    currentCardId: cardForSession(board, sessionId)?.id ?? null,
+    revision,
+  };
+}
+
+/** The newest comments of a card, each body bounded, oldest first. */
+export function kanbanToolComments(comments: readonly KanbanComment[]): CommentData[] {
+  const shown = comments.slice(-KANBAN_COMMENT_READ_LIMIT);
+  return shown.map((comment) => {
+    const points = [...comment.body];
+    const body = points.length > KANBAN_COMMENT_BUDGET
+      ? `${points.slice(0, KANBAN_COMMENT_BUDGET).join("")}…[truncated]`
+      : comment.body;
+    return { ...comment, body };
+  });
+}
+
+/** One written comment, answered the way a mutation answers: the card, its lane, the next lane. */
+export function kanbanToolCommentResult(
+  board: KanbanBoard,
+  revision: number,
+  sessionId: string,
+  cardId: string,
+  comment: KanbanComment,
+): KanbanToolResult {
+  const card = board.cards.find((c) => c.id === cardId);
+  const index = board.lanes.findIndex((l) => l.id === card?.laneId);
+  if (!card || index < 0) return refused("The commented card or its lane is missing. Read the board before continuing.");
+  return {
+    ok: true,
+    action: "comment",
+    projectDir: board.projectDir,
+    comment,
+    card,
+    lane: board.lanes[index],
+    nextLaneId: board.lanes[index + 1]?.id ?? null,
     currentCardId: cardForSession(board, sessionId)?.id ?? null,
     revision,
   };

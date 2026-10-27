@@ -28,6 +28,7 @@ import {
   type KanbanBoard,
   type KanbanBoardResponse,
   type KanbanCard,
+  type KanbanComment,
   type KanbanLane,
 } from "./kanban-types";
 
@@ -596,4 +597,155 @@ export function kanbanBoardSnapshotForTests(projectDir: string): KanbanBoard | n
  */
 export function retryBoardForTests(key: string): void {
   retryBoard(key);
+}
+
+// ---------------------------------------------------------------------------
+// Comments
+// ---------------------------------------------------------------------------
+// A card's thread is NOT part of the board: it has its own read
+// (`GET /api/kanban/comments`), so the board payload and its poll stay small
+// however many notes a project keeps. A write goes through the board route
+// (`add-comment` / `delete-comment`), which shares the board's lock, queue and
+// revision — and that revision is what makes a thread refetch: the tab that
+// wrote it refetches at once, every other open tab on the next poll tick.
+
+export type KanbanCommentsStatus = "loading" | "ready" | "error";
+
+export interface KanbanCommentsView {
+  comments: KanbanComment[];
+  /** Every entry of the card, including the ones this page left out. */
+  total: number;
+  status: KanbanCommentsStatus;
+  error?: string;
+}
+
+const EMPTY_COMMENTS: KanbanComment[] = [];
+const LOADING_COMMENTS: KanbanCommentsView = { comments: EMPTY_COMMENTS, total: 0, status: "loading" };
+
+interface CommentEntry {
+  comments: KanbanComment[];
+  total: number;
+  revision: number | null;
+  status: KanbanCommentsStatus;
+  error: string | null;
+  view: KanbanCommentsView;
+  /** Bumped by every fetch: an answer that arrives after a newer one is dropped. */
+  loadId: number;
+}
+
+const commentEntries = new Map<string, CommentEntry>();
+const commentListeners = new Set<() => void>();
+
+function subscribeComments(listener: () => void): () => void {
+  commentListeners.add(listener);
+  return () => {
+    commentListeners.delete(listener);
+  };
+}
+
+function commentKey(projectDir: string, cardId: string): string {
+  return `${projectDir}\u0000${cardId}`;
+}
+
+function commentEntryFor(key: string): CommentEntry {
+  let entry = commentEntries.get(key);
+  if (!entry) {
+    entry = { comments: EMPTY_COMMENTS, total: 0, revision: null, status: "loading", error: null, view: LOADING_COMMENTS, loadId: 0 };
+    commentEntries.set(key, entry);
+  }
+  return entry;
+}
+
+/** Rebuilds the view only when it changed: `useSyncExternalStore` needs a stable snapshot. */
+function publishComments(entry: CommentEntry): void {
+  const error = entry.error ?? undefined;
+  if (entry.view.comments !== entry.comments || entry.view.total !== entry.total
+    || entry.view.status !== entry.status || entry.view.error !== error) {
+    entry.view = error === undefined
+      ? { comments: entry.comments, total: entry.total, status: entry.status }
+      : { comments: entry.comments, total: entry.total, status: entry.status, error };
+  }
+  for (const listener of commentListeners) listener();
+}
+
+async function fetchComments(projectDir: string, cardId: string): Promise<void> {
+  const entry = commentEntryFor(commentKey(projectDir, cardId));
+  const loadId = ++entry.loadId;
+  try {
+    const body = await requestJson(`${KANBAN_URL}/comments?cwd=${encodeURIComponent(projectDir)}&cardId=${encodeURIComponent(cardId)}`);
+    if (loadId !== entry.loadId) return;
+    entry.comments = Array.isArray(body.comments) ? (body.comments as KanbanComment[]) : EMPTY_COMMENTS;
+    entry.total = typeof body.total === "number" ? body.total : entry.comments.length;
+    entry.revision = typeof body.revision === "number" ? body.revision : null;
+    entry.status = "ready";
+    entry.error = null;
+  } catch (err) {
+    if (loadId !== entry.loadId) return;
+    entry.status = "error";
+    entry.error = errorMessage(err);
+  }
+  publishComments(entry);
+}
+
+/**
+ * The board's revision, reactive: a thread refetches when it moves, which is
+ * how another tab's (or the agent's) note reaches this one without a poll of
+ * its own.
+ */
+export function useKanbanBoardRevision(projectDir: string | null): number {
+  const getSnapshot = useCallback(() => (projectDir ? entries.get(projectDir)?.revision ?? 0 : 0), [projectDir]);
+  return useSyncExternalStore(subscribe, getSnapshot, () => 0);
+}
+
+/**
+ * One card's comment thread. Loaded when the card is first shown and refetched
+ * whenever the board revision moves; `null` card reads as empty.
+ */
+export function useKanbanCardComments(projectDir: string | null, cardId: string | null): KanbanCommentsView {
+  const revision = useKanbanBoardRevision(projectDir);
+  const key = projectDir && cardId ? commentKey(projectDir, cardId) : null;
+  const getSnapshot = useCallback(() => (key ? commentEntries.get(key)?.view ?? LOADING_COMMENTS : LOADING_COMMENTS), [key]);
+  const view = useSyncExternalStore(subscribeComments, getSnapshot, () => LOADING_COMMENTS);
+  useEffect(() => {
+    if (!projectDir || !cardId) return;
+    const entry = commentEntries.get(commentKey(projectDir, cardId));
+    // The write that moved the revision may have been this tab's own comment.
+    if (entry?.status === "ready" && entry.revision === revision) return;
+    void fetchComments(projectDir, cardId);
+  }, [projectDir, cardId, revision]);
+  return view;
+}
+
+/** Posts one comment write, adopts the answered board (whose revision moved), then refreshes the thread. */
+async function postComment(projectDir: string, cardId: string, action: { action: "add-comment"; body: string } | { action: "delete-comment"; commentId: string }): Promise<void> {
+  try {
+    const answer = await requestBoard(KANBAN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: projectDir, cardId, ...action }),
+    });
+    const entry = entries.get(projectDir);
+    if (entry) {
+      adopt(entry, answer);
+      publish(entry);
+    }
+  } catch (err) {
+    const entry = commentEntryFor(commentKey(projectDir, cardId));
+    entry.status = "error";
+    entry.error = errorMessage(err);
+    publishComments(entry);
+    return;
+  }
+  await fetchComments(projectDir, cardId);
+}
+
+/** A person's note on a card. The server stamps the author (`user`) and the time. */
+export function kanbanAddCardComment(projectDir: string | null, cardId: string | null, body: string): void {
+  if (!projectDir || !cardId || !body.trim()) return;
+  void postComment(projectDir, cardId, { action: "add-comment", body: body.trim() });
+}
+
+export function kanbanDeleteCardComment(projectDir: string | null, cardId: string | null, commentId: string): void {
+  if (!projectDir || !cardId) return;
+  void postComment(projectDir, cardId, { action: "delete-comment", commentId });
 }

@@ -243,10 +243,11 @@ export function createKanbanExtension(options?: { isReadOnly?: (ctx: ExtensionCo
         description: "Read or manage tasks on this session's project Kanban board (shared by its worktrees). "
           + "read with no cardId lists the lanes with their card counts and your own linked card; it never sends every card body. "
           + "search finds cards by literal text (title or description) and/or one laneId, returning at most `limit` compact rows (id, title, laneId, excerpt); narrow with query instead of raising limit. "
-          + "read with cardId returns that one card in full. "
+          + "read with cardId returns that one card in full, with its newest comments (bounded). "
           + "create requires title and defaults to an independent, sessionless Backlog card; an explicit work lane attaches it to this session. "
           + "update patches title/description/laneId; omitted fields stay unchanged, empty description clears it. Omit cardId to update your linked card. "
           + "An explicit work lane on a free card claims it. Never edit another session's card or claim a second card. Linked cards cannot enter Backlog. "
+          + "comment writes one note to a card's thread (your linked card when cardId is omitted): record the handoff, the decision and what is left, as the work moves. "
           + "Use explicit lane IDs from read; same-lane updates do not reorder. Read-only sessions may read and search only. "
           + "Create is not idempotent: do not blindly retry it. For delegation, create a Backlog task and pass its cardId in the existing Agent prompt; this tool launches nothing.",
         parameters: KanbanToolParameters,
@@ -256,8 +257,8 @@ export function createKanbanExtension(options?: { isReadOnly?: (ctx: ExtensionCo
           if (!parsed.ok) return toolResult(parsed);
           // This belongs INSIDE execute, not only a tool_call hook: every direct
           // or nested execution must be checked against the executing session.
-          if ((parsed.request.action === "create" || parsed.request.action === "update") && isReadOnly(ctx)) {
-            return toolResult({ ok: false, code: "read-only", error: "This session is read-only. Use kanban read or search; switch to a write-capable session or subagent profile to create or update tasks." });
+          if ((parsed.request.action === "create" || parsed.request.action === "update" || parsed.request.action === "comment") && isReadOnly(ctx)) {
+            return toolResult({ ok: false, code: "read-only", error: "This session is read-only. Use kanban read or search; switch to a write-capable session or subagent profile to create, update or comment on tasks." });
           }
           const sessionId = ctx.sessionManager.getSessionId();
           const result = await executeKanbanToolRequest(ctx.cwd, {

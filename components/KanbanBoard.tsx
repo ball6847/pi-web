@@ -74,6 +74,14 @@ export interface KanbanBoardProps {
   onOpenSession(sessionId: string, title: string): void;
   /** Start a new session from a sessionless card: opens the composer prefilled and pre-linked. */
   onStartSession(card: KanbanCard): void;
+  /**
+   * Open a card in the right panel's detail tab (the card's only editor).
+   * Absent (node tests, a bare board): the card click and the menu's Edit keep
+   * the inline form.
+   */
+  onOpenCard?(cardId: string, title: string): void;
+  /** Create a card in a lane, in the detail tab's draft mode; absent = the inline form. */
+  onNewCard?(laneId: string): void;
 }
 
 // -- shared chrome -----------------------------------------------------------
@@ -591,6 +599,7 @@ export function CardView({
   onOpenSession,
   onOpenMenu,
   onEdit,
+  onOpenCard,
   onOpenLinkPicker,
   onCardPointerDown,
   onCardTouchMove,
@@ -617,6 +626,8 @@ export function CardView({
   onOpenSession(sessionId: string, title: string): void;
   onOpenMenu(anchor: DOMRect, card: KanbanCard): void;
   onEdit(card: KanbanCard): void;
+  /** The board opens the card's detail tab instead of the inline form or the session. */
+  onOpenCard?(card: KanbanCard): void;
   onOpenLinkPicker(anchor: DOMRect, card: KanbanCard): void;
   onCardPointerDown(event: ReactPointerEvent<HTMLElement>): void;
   /** The board's non-passive touchmove: it holds the lane's list still once the card is picked up. */
@@ -666,7 +677,11 @@ export function CardView({
       data-kanban-card={card.id}
       onPointerDown={onCardPointerDown}
       onClick={() => {
-        if (linked && !sessionGone && card.sessionId) onOpenSession(card.sessionId, card.sessionTitle ?? card.title);
+        // The detail tab is the card's one destination when the shell offers
+        // it: it carries the session, the editor and the journal. Without it
+        // (tests, a bare board) the old split stays: open the session, or edit.
+        if (onOpenCard) onOpenCard(card);
+        else if (linked && !sessionGone && card.sessionId) onOpenSession(card.sessionId, card.sessionTitle ?? card.title);
         else if (!linked) onEdit(card);
       }}
       style={{
@@ -676,7 +691,7 @@ export function CardView({
         border: `1px solid ${highlighted ? "var(--accent)" : "var(--border)"}`,
         borderRadius: 8,
         padding: "8px 10px",
-        cursor: linked || !lane.fixed ? "pointer" : "default",
+        cursor: linked || !lane.fixed || onOpenCard ? "pointer" : "default",
         opacity: dragSource ? 0.45 : done && !running ? 0.72 : 1,
         boxShadow: highlighted ? "0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent)" : undefined,
         transition: "border-color 0.15s, box-shadow 0.15s, opacity 0.15s",
@@ -1052,6 +1067,7 @@ export function LaneColumn({
   onOpenMenu,
   onOpenLinkPicker,
   onOpenSession,
+  onOpenCard,
   mobile,
   dropTarget,
   dropBefore,
@@ -1084,6 +1100,7 @@ export function LaneColumn({
   onOpenMenu(anchor: DOMRect, card: KanbanCard): void;
   onOpenLinkPicker(anchor: DOMRect, card: KanbanCard): void;
   onOpenSession(sessionId: string, title: string): void;
+  onOpenCard?(card: KanbanCard): void;
   mobile: boolean;
   /** The drag's target lane is this one: the column tints to take the drop. */
   dropTarget: boolean;
@@ -1236,6 +1253,7 @@ export function LaneColumn({
                 onOpenSession={onOpenSession}
                 onOpenMenu={onOpenMenu}
                 onEdit={(target) => onOpenForm(lane.id, target)}
+                onOpenCard={onOpenCard}
                 onOpenLinkPicker={onOpenLinkPicker}
                 onCardPointerDown={(event) => onCardPointerDown(event, card.id)}
                 onCardTouchMove={onCardTouchMove}
@@ -1772,7 +1790,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
 }
 
 export function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardData; notice: React.ReactNode }) {
-  const { board, projectDir, projectName, sessions, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, highlightCardId, query, onQueryChange, onOpenSession, onStartSession, notice } = props;
+  const { board, projectDir, projectName, sessions, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, highlightCardId, query, onQueryChange, onOpenSession, onStartSession, onOpenCard, onNewCard, notice } = props;
   const { t } = useI18n();
   const mobile = useIsMobile();
   const [configOpen, setConfigOpen] = useState(false);
@@ -1919,12 +1937,22 @@ export function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardDa
     setLinkFor({ cardId: card.id, anchor });
   }, []);
   const openForm = useCallback((laneId: string, card: KanbanCard | null) => {
+    // The shell opens the detail tab instead (the card's one editor): a card
+    // opens as itself, a lane's "+" opens a draft in that lane.
+    if (card && onOpenCard) {
+      onOpenCard(card.id, card.title);
+      return;
+    }
+    if (!card && onNewCard) {
+      onNewCard(laneId);
+      return;
+    }
     setFormFor((current) => {
       // Clicking the same "+" (or card) again closes the open form.
       if (current?.laneId === laneId && (current.cardId ?? null) === (card?.id ?? null)) return null;
       return { laneId, cardId: card?.id ?? null };
     });
-  }, []);
+  }, [onNewCard, onOpenCard]);
 
   const menuEntries: MenuEntry[] = useMemo(() => {
     if (!menuCard) return [];
@@ -2184,6 +2212,7 @@ export function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardDa
             onOpenMenu={openMenu}
             onOpenLinkPicker={openLink}
             onOpenSession={onOpenSession}
+            onOpenCard={onOpenCard ? (target) => onOpenCard(target.id, target.title) : undefined}
             mobile={mobile}
             dropTarget={dragView !== null && dragView.phase === "dragging" && dragView.laneId === lane.id && !dragInvalid}
             dropBefore={dragView?.laneId === lane.id ? dragView.beforeCardId : null}
