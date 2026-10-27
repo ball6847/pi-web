@@ -157,12 +157,11 @@ export async function validateKanbanCwd(value: unknown): Promise<{ ok: true; cwd
 // ---------------------------------------------------------------------------
 
 /**
- * Whether the session's file exists and belongs to this board's project: its
- * header's folder is the project root, or a worktree of it (a session may run
- * in any checkout of the repository).
+ * The session's header folder, without asking whose project it belongs to.
+ * `null` when the session's file (or its header) is gone.
  */
-export async function validateSession(cwd: string, sessionId: string): Promise<boolean> {
-  if (typeof sessionId !== "string" || !sessionId) return false;
+async function sessionCwdOf(sessionId: string): Promise<string | null> {
+  if (typeof sessionId !== "string" || !sessionId) return null;
   try {
     let path = await resolveSessionPath(sessionId);
     // A path cached before the file was deleted points at nothing: look again from the disk.
@@ -170,9 +169,22 @@ export async function validateSession(cwd: string, sessionId: string): Promise<b
       invalidateSessionPathCache(sessionId);
       path = await resolveSessionPath(sessionId);
     }
-    if (!path || !existsSync(path)) return false;
-    const sessionCwd = readSessionHeader(path)?.cwd;
-    if (!sessionCwd) return false;
+    if (!path || !existsSync(path)) return null;
+    return readSessionHeader(path)?.cwd ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the session's file exists and belongs to this board's project: its
+ * header's folder is the project root, or a worktree of it (a session may run
+ * in any checkout of the repository).
+ */
+export async function validateSession(cwd: string, sessionId: string): Promise<boolean> {
+  const sessionCwd = await sessionCwdOf(sessionId);
+  if (!sessionCwd) return false;
+  try {
     if (resolve(sessionCwd) === resolve(cwd)) return true;
     return resolve((await resolveProject(sessionCwd)).projectRoot) === resolve(cwd);
   } catch {
@@ -201,16 +213,21 @@ function recentlyAttached(sessionId: string, now = Date.now()): boolean {
   return freshAttachments.has(sessionId);
 }
 
-async function aliveSessions(cwd: string, board: KanbanBoard): Promise<Set<string>> {
+async function aliveSessions(board: KanbanBoard): Promise<Set<string>> {
   const ids = linkedSessionIds(board);
-  const checks = await Promise.all(ids.map(async (id) => ((await validateSession(cwd, id)) || recentlyAttached(id)) ? id : null));
+  // Pruning unlinks a session whose FILE is gone, and nothing else: a link is
+  // never destroyed because the project resolution of its cwd failed (a
+  // leftover or removed worktree, a transient git failure) or because the
+  // session was moved to another project. Losing a review link costs the user
+  // the transcript; a stale link costs one click on Unlink.
+  const checks = await Promise.all(ids.map(async (id) => (((await sessionCwdOf(id)) !== null) || recentlyAttached(id)) ? id : null));
   return new Set(checks.filter((id): id is string => id !== null));
 }
 
 /** Dead-link pruning (the same board back when nothing was dead). */
-async function pruneBoard(cwd: string, board: KanbanBoard, now: number): Promise<KanbanBoard> {
+async function pruneBoard(board: KanbanBoard, now: number): Promise<KanbanBoard> {
   if (linkedSessionIds(board).length === 0) return board;
-  return pruneDeadLinks(board, await aliveSessions(cwd, board), now);
+  return pruneDeadLinks(board, await aliveSessions(board), now);
 }
 
 // ---------------------------------------------------------------------------
@@ -622,14 +639,14 @@ export async function readBoard(cwd: string, options: { create?: boolean } = {})
       const { board, revision } = opened.snapshot;
       closeOpened(opened);
       if (options.create === false) return { ok: true, board, revision };
-      const alive = await aliveSessions(projectRoot, board);
+      const alive = await aliveSessions(board);
       // Nothing dead: answer the read without taking the lock or writing.
       if (linkedSessionIds(board).every((id) => alive.has(id))) return { ok: true, board, revision };
-      return await editBoard(projectRoot, async (fresh, now) => ({ board: await pruneBoard(projectRoot, fresh, now) }));
+      return await editBoard(projectRoot, async (fresh, now) => ({ board: await pruneBoard(fresh, now) }));
     }
     closeOpened(opened);
     if (options.create === false) return { ok: true, board: freshBoard(projectRoot), revision: 0 };
-    return await editBoard(projectRoot, async (board, now) => ({ board: await pruneBoard(projectRoot, board, now) }));
+    return await editBoard(projectRoot, async (board, now) => ({ board: await pruneBoard(board, now) }));
   } catch (error) {
     return toFailure(error);
   }
@@ -743,7 +760,7 @@ export async function applyMutation(cwd: string, action: KanbanAction): Promise<
     }
     return await editBoard(projectRoot, async (board, now) => {
       const next = applyKanbanAction(board, action, now);
-      return next ? { board: await pruneBoard(projectRoot, next, now) } : failure("refused", `The board's rules refuse "${action.action}" here`);
+      return next ? { board: await pruneBoard(next, now) } : failure("refused", `The board's rules refuse "${action.action}" here`);
     });
   } catch (error) {
     return toFailure(error);
