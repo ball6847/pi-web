@@ -9,7 +9,7 @@ export interface Tab {
   id: string;
   label: string;
   filePath: string;
-  kind?: "terminal" | "agent";
+  kind?: "terminal" | "agent" | "card";
   closing?: boolean;
   sourceSessionId?: string | null;
   initialDisplayMode?: FileViewerDisplayMode;
@@ -80,7 +80,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
           <div
             key={tab.id}
             role="tab"
-            aria-label={tab.kind === "terminal" ? t("terminal.tabLabel", { name: tab.label }) : tab.kind === "agent" ? t("subagent.tabLabel", { name: tab.label }) : tab.label}
+            aria-label={tab.kind === "terminal" ? t("terminal.tabLabel", { name: tab.label }) : tab.kind === "agent" ? t("subagent.tabLabel", { name: tab.label }) : tab.kind === "card" ? t("kanban.detailTabLabel", { name: tab.label }) : tab.label}
             aria-selected={isActive}
             tabIndex={isActive || (!activeTabId && tabs[0].id === tab.id) ? 0 : -1}
             onKeyDown={(event) => {
@@ -134,6 +134,10 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
               ) : tab.kind === "agent" ? (
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <rect x="5" y="7" width="14" height="11" rx="2" /><path d="M9 11h.01M15 11h.01M9 15h6M12 7V4M10 4h4" />
+                </svg>
+              ) : tab.kind === "card" ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="3" y="4" width="18" height="16" rx="2" /><line x1="9" y1="4" x2="9" y2="20" /><line x1="15" y1="4" x2="15" y2="20" />
                 </svg>
               ) : getFileIcon(tab.label, 13)}
             </span>

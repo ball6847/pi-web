@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { KANBAN_LANE_INSTRUCTIONS_MAX } from "@/lib/kanban-tool-limits";
-import type { KanbanAction, KanbanBoardResponse } from "@/lib/kanban-types";
+import { KANBAN_COMMENT_MAX, KANBAN_LANE_INSTRUCTIONS_MAX } from "@/lib/kanban-tool-limits";
+import type { KanbanBoardResponse, KanbanRequest } from "@/lib/kanban-types";
 import {
   applyMutation,
   getBoardRevision,
@@ -93,7 +93,7 @@ function optional(body: Record<string, unknown>, key: string, max: number): stri
 }
 
 /** The action a POST body names, shape-checked; the board's rules judge it afterwards. */
-function readAction(body: Record<string, unknown>): KanbanAction {
+function readAction(body: Record<string, unknown>): KanbanRequest {
   switch (body.action) {
     case "add-card":
       return {
@@ -171,6 +171,16 @@ function readAction(body: Record<string, unknown>): KanbanAction {
     }
     case "delete-lane":
       return { action: "delete-lane", laneId: required(body, "laneId", MAX_ID) };
+    // A card's comments are written through this one route too (one lock, one
+    // queue, one revision), but they live in their own table and their own read.
+    case "add-comment":
+      return {
+        action: "add-comment",
+        cardId: required(body, "cardId", MAX_ID),
+        body: required(body, "body", KANBAN_COMMENT_MAX),
+      };
+    case "delete-comment":
+      return { action: "delete-comment", commentId: required(body, "commentId", MAX_ID) };
     default:
       throw new Invalid("Unknown action");
   }
@@ -207,7 +217,7 @@ export async function POST(req: Request) {
   const valid = await validateKanbanCwd(body.cwd);
   if (!valid.ok) return failureResponse(valid);
 
-  let action: KanbanAction;
+  let action: KanbanRequest;
   try {
     action = readAction(body);
   } catch (error) {

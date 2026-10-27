@@ -11,6 +11,7 @@ const route = await jiti.import("./route.ts");
 const data = await jiti.import("../../../lib/kanban-data.ts");
 const { allowFileRoot } = await jiti.import("../../../lib/file-access.ts");
 const { DatabaseSync } = await import("node:sqlite");
+const { KANBAN_SCHEMA_VERSION } = await jiti.import("../../../lib/kanban-types.ts");
 
 function resetGlobalState() {
   globalThis.__piSessionListCache = undefined;
@@ -122,7 +123,7 @@ test("a GET auto-creates the board on first read and answers the second read wit
   assert.equal(first.body.board.lanes.length, 6);
   assert.deepEqual(first.body.board.cards, []);
   assert.ok(f.exists());
-  assert.equal(f.schema(), 2, "the file carries the board schema stamp");
+  assert.equal(f.schema(), KANBAN_SCHEMA_VERSION, "the file carries the board schema stamp");
   assert.deepEqual(f.files(), ["kanban.sqlite"], "the board is one self-contained file");
 
   const rows = f.rows();
@@ -308,7 +309,7 @@ test("a POST on a board from a newer schema is a 500 unsupported-schema and leav
   const f = fixture(t);
   await get(f.project);
   const stamp = new DatabaseSync(f.path);
-  stamp.exec("PRAGMA user_version = 3");
+  stamp.exec(`PRAGMA user_version = ${KANBAN_SCHEMA_VERSION + 1}`);
   stamp.close();
   const newer = f.rows();
 
@@ -373,7 +374,7 @@ test("a creating GET on a corrupt file sets it aside and answers a fresh board",
   assert.equal(read.body.board.lanes.length, 6);
   assert.equal(read.body.board.cards.length, 0);
   assert.equal(corruptBackups(f).length, 1, "exactly one backup sibling");
-  assert.equal(f.schema(), 2, "the new file is a valid board");
+  assert.equal(f.schema(), KANBAN_SCHEMA_VERSION, "the new file is a valid board");
 });
 
 test("a POST on a corrupt file sets it aside, applies the action to a fresh board, and has no corrupt flag of its own", async (t) => {
@@ -676,7 +677,7 @@ test("a fresh board's rows are exactly the answered board, one self-contained fi
   assert.equal(res.status, 200);
   assert.deepEqual(f.board(), res.body.board, "what the answer says is what the rows hold");
   assert.deepEqual(f.files(), ["kanban.sqlite"], "no journal or sidecar is left beside it");
-  assert.equal(f.schema(), 2);
+  assert.equal(f.schema(), KANBAN_SCHEMA_VERSION);
   assert.equal(f.revision(), res.body.revision);
   assert.equal(f.stat().mode & 0o777, 0o644);
 });

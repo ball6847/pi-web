@@ -24,3 +24,19 @@ export const KANBAN_NOTICE_LANE_LIMIT = 24;
  * 2000 characters is roughly 500 tokens, paid once per lane entry, not per turn.
  */
 export const KANBAN_LANE_INSTRUCTIONS_MAX = 2000;
+
+/**
+ * Code points one comment may hold — the route's write cap and the agent tool's
+ * (a note is a handoff paragraph or a short list, not a document; the card's
+ * description is where the long text goes).
+ */
+export const KANBAN_COMMENT_MAX = 4000;
+
+/** `read { cardId }` sends at most this many of the card's newest comments. */
+export const KANBAN_COMMENT_READ_LIMIT = 10;
+
+/** Code points of one comment body inside a card read: the head of a long note. */
+export const KANBAN_COMMENT_BUDGET = 800;
+
+/** `GET /api/kanban/comments` answers the newest rows, up to this many. */
+export const KANBAN_COMMENT_PAGE_LIMIT = 100;
