@@ -491,6 +491,17 @@ export function kanbanDeleteLane(projectDir: string | null, laneId: string): voi
 export function kanbanSetCardPrefix(projectDir: string | null, prefix: string): void {
   mutate(projectDir, { action: "set-card-prefix", prefix });
 }
+/**
+ * The board's agent notice: the template of the line a run gets about its card,
+ * and the turn count its reminder repeats it on (0 = never). Both fields are
+ * optional so one field is edited without sending the other.
+ */
+export function kanbanSetNotice(
+  projectDir: string | null,
+  patch: { template?: string; reminderTurns?: number },
+): void {
+  mutate(projectDir, { action: "set-notice", ...patch });
+}
 export function kanbanAddCard(
   projectDir: string | null,
   laneId: string,

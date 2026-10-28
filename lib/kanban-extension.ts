@@ -1,5 +1,5 @@
 import type { ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
-import { cardForSession } from "./kanban-shared";
+import { cardForSession, kanbanBoardNotice, kanbanNoticeValues, renderKanbanNoticeTemplate } from "./kanban-shared";
 import { executeKanbanToolRequest, readBoard } from "./kanban-store";
 import { parseKanbanToolRequest, type KanbanToolResult } from "./kanban-tool-domain";
 import { KanbanToolOutputSchema, KanbanToolParameters } from "./kanban-tool-schema";
@@ -12,10 +12,12 @@ import type { SessionEntry } from "./types";
 export const KANBAN_EXTENSION_NAME = "pi-web-kanban";
 
 /**
- * The one line a run gets when this session's card or the board's lanes change.
- * `display: false` keeps it out of the chat: it is context for the model, not a
- * message the user sent. Never sent twice for the same state, so a session costs
- * a few dozen tokens per change instead of one line per turn.
+ * The one line a run gets when this session's card or the board's lanes change,
+ * plus the board's own reminder every N turns (`set-notice`). `display: false`
+ * keeps it out of the chat: it is context for the model, not a message the user
+ * sent. Never sent twice for the same state, so a session costs a few dozen
+ * tokens per change instead of one line per turn — unless the board's reminder
+ * asks for that line again, which is one deliberate repeat per N turns.
  */
 export const KANBAN_CARD_NOTICE_TYPE = "pi-web:kanban-card";
 
@@ -25,12 +27,15 @@ export const KANBAN_NO_CARD = "none";
 /** What "no lane instructions" hashes to: no card, no lane, or a lane without them. */
 export const KANBAN_NO_LANE_INSTRUCTIONS = "none";
 
+/** What "the built-in card line" hashes to: a board that stored no template. */
+export const KANBAN_NO_TEMPLATE = "none";
+
 /** The dismiss line after the card leaves an instructed lane (or its instructions are cleared). */
 export const KANBAN_LANE_INSTRUCTIONS_DROPPED = "Kanban: the lane instructions given earlier no longer apply.";
 
 /**
- * The three halves of a notice's state, kept apart so a card change never
- * re-sends the lanes, and neither re-sends the lane instructions.
+ * The three halves of a notice's state plus the wording, kept apart so a card
+ * change never re-sends the lanes, and neither re-sends the lane instructions.
  */
 export interface KanbanNoticeState {
   /** The session's card: id, lane and title; `KANBAN_NO_CARD` when it has none. */
@@ -39,6 +44,13 @@ export interface KanbanNoticeState {
   lanes: string;
   /** The card's lane instructions: `laneId#hash(text)`; `KANBAN_NO_LANE_INSTRUCTIONS` when there are none. */
   laneInstr: string;
+  /**
+   * The board's notice template: `hash(text)`, or `KANBAN_NO_TEMPLATE` for the
+   * built-in line. Editing the wording is a change the model must hear — it is
+   * what the whole experimenting loop is for; a notice persisted before this
+   * half existed reads as `KANBAN_NO_TEMPLATE`.
+   */
+  text: string;
 }
 
 /**
@@ -73,6 +85,12 @@ function hashText(text: string): string {
   return (hash >>> 0).toString(36);
 }
 
+/** The template's identity: a blank template is the built-in line, so both are `none`. */
+export function kanbanTemplateSignature(template = ""): string {
+  const text = template.trim();
+  return text ? hashText(text) : KANBAN_NO_TEMPLATE;
+}
+
 /**
  * The lane-instructions identity of a card's position: the lane id plus a hash
  * of its instructions, so entering an instructed lane, and editing those
@@ -104,6 +122,21 @@ export function kanbanLaneInstructionsText(lanes: KanbanLane[], card: KanbanCard
 }
 
 /**
+ * The line the card half of a notice speaks: the board's own template, or the
+ * built-in one. `{cardKey}`, `{cardId}`, `{title}`, `{lane}` and `{laneId}` are
+ * the placeholders; the lane is the one the card sits in NOW, which is the fact
+ * a model has to compare against what it is doing.
+ */
+export function kanbanCardNoticeLine(
+  lanes: KanbanLane[],
+  card: KanbanCard,
+  cardKey: string,
+  template = "",
+): string {
+  return renderKanbanNoticeTemplate(template, kanbanNoticeValues(lanes, card, cardKey));
+}
+
+/**
  * The notice for a state change. Each half speaks only for itself: a link
  * change never re-sends the lanes, and neither re-sends the lane instructions.
  * The instructions are their own block, never part of the lanes line (ids
@@ -120,19 +153,19 @@ export function kanbanCardNotice(
     laneInstrDropped?: boolean;
     /** The card's human key (`PIW-42`): what the model and the user both read. Falls back to the id. */
     cardKey?: string;
+    /** The board's notice template (`set-notice`); blank means the built-in line. */
+    template?: string;
   } = {},
 ): { state: KanbanNoticeState; content: string } {
   const state: KanbanNoticeState = {
     card: kanbanCardSignature(card),
     lanes: kanbanLaneSignature(lanes),
     laneInstr: kanbanLaneInstructionSignature(lanes, card),
+    text: kanbanTemplateSignature(options.template ?? ""),
   };
   const lines: string[] = [];
   if (options.cardChanged !== false) {
-    if (card) {
-      lines.push(`Kanban: this session is on card ${options.cardKey ?? card.id}. `
-        + "Always keep its lane matching your actual status with kanban update (no cardId).");
-    }
+    if (card) lines.push(kanbanCardNoticeLine(lanes, card, options.cardKey ?? card.id, options.template));
     else if (options.wasTracked) lines.push("Kanban: this session is no longer on a Kanban card.");
   }
   if (options.lanesChanged !== false) lines.push(`Kanban lanes in board order: ${kanbanBoardLanesText(lanes)}`);
@@ -158,12 +191,13 @@ function toolResult(result: KanbanToolResult) {
 }
 
 /**
- * What this session last heard about its card, and how much context it had heard
- * it in. A compaction or a branch switch replaces that context with fewer
- * entries, so `seenAt` is the guard: a memory that predates the shrunken context
- * is stale, and the notice is repeated once for the model that lost it.
+ * What this session last heard about its card, how much context it had heard it
+ * in, and how many turns it has been quiet since. A compaction or a branch
+ * switch replaces that context with fewer entries, so `seenAt` is the guard: a
+ * memory that predates the shrunken context is stale, and the notice — and the
+ * turn count — start again for the model that lost it.
  */
-type NoticeMemory = Map<string, { state: KanbanNoticeState; seenAt: number }>;
+type NoticeMemory = Map<string, { state: KanbanNoticeState; seenAt: number; turns: number }>;
 
 /**
  * The current context — what the model actually sees — not the whole append-only
@@ -187,19 +221,31 @@ function priorState(ctx: ExtensionContext, memory: NoticeMemory, sessionId: stri
     if (entry.type !== "custom_message" || entry.customType !== KANBAN_CARD_NOTICE_TYPE) continue;
     const details = entry.details as Partial<KanbanNoticeState> | undefined;
     if (typeof details?.card !== "string" || typeof details.lanes !== "string") return undefined;
-    // A notice persisted before lane instructions existed has no third half: it reads as "none".
-    return { card: details.card, lanes: details.lanes, laneInstr: typeof details.laneInstr === "string" ? details.laneInstr : KANBAN_NO_LANE_INSTRUCTIONS };
+    // A notice persisted before lane instructions, or before the template, has a
+    // half less: it reads as "none", which is the state the built-in defaults are.
+    return {
+      card: details.card,
+      lanes: details.lanes,
+      laneInstr: typeof details.laneInstr === "string" ? details.laneInstr : KANBAN_NO_LANE_INSTRUCTIONS,
+      text: typeof details.text === "string" ? details.text : KANBAN_NO_TEMPLATE,
+    };
   }
   return undefined;
 }
 
 const sameState = (a: KanbanNoticeState | undefined, b: KanbanNoticeState): boolean =>
-  a !== undefined && a.card === b.card && a.lanes === b.lanes && a.laneInstr === b.laneInstr;
+  a !== undefined && a.card === b.card && a.lanes === b.lanes && a.laneInstr === b.laneInstr && a.text === b.text;
 
 /**
- * A run's card notice, or undefined when there is nothing new to say. Reads are
- * non-creating and never throw into the run: a board that cannot be read (a
- * removed worktree, another build's schema) must not block the prompt.
+ * A run's card notice, or a reminder when none is due but the board asks for
+ * one. Reads are non-creating and never throw into the run: a board that cannot
+ * be read (a removed worktree, another build's schema) must not block the prompt.
+ *
+ * `before_agent_start` fires once per turn, which is what the reminder counts: a
+ * session's first turn is turn 1, and a notice that was actually sent (a change)
+ * puts the count back to zero. Nothing is stored for it, so a restarted server
+ * starts counting again — the transcript still holds the last notice, and the
+ * reminder is a nudge, not a rule.
  */
 async function cardNoticeForRun(ctx: ExtensionContext, memory: NoticeMemory) {
   const snapshot = await readBoard(ctx.cwd, { create: false });
@@ -208,13 +254,19 @@ async function cardNoticeForRun(ctx: ExtensionContext, memory: NoticeMemory) {
   const context = contextEntries(ctx);
   const prior = priorState(ctx, memory, sessionId, context);
   const card = cardForSession(snapshot.board, sessionId) ?? null;
+  const cardKey = card ? kanbanCardKey(snapshot.board, card) : undefined;
   const laneInstr = kanbanLaneInstructionSignature(snapshot.board.lanes, card);
+  const boardNotice = kanbanBoardNotice(snapshot.board);
+  const textSignature = kanbanTemplateSignature(boardNotice.template);
   // Each half speaks for itself: a link change never re-sends the lanes, and
   // neither re-sends the lane instructions.
   const notice = kanbanCardNotice(snapshot.board.lanes, card, {
-    cardKey: card ? kanbanCardKey(snapshot.board, card) : undefined,
+    cardKey,
+    template: boardNotice.template,
     wasTracked: prior !== undefined && prior.card !== KANBAN_NO_CARD,
-    cardChanged: prior === undefined || prior.card !== kanbanCardSignature(card),
+    // The wording is part of the card half: an edited template is exactly the
+    // experiment the board's own setting exists for, so the next turn hears it.
+    cardChanged: prior === undefined || prior.card !== kanbanCardSignature(card) || prior.text !== textSignature,
     lanesChanged: prior === undefined || prior.lanes !== kanbanLaneSignature(snapshot.board.lanes),
     laneInstrChanged: prior === undefined || prior.laneInstr !== laneInstr,
     // The card left an instructed lane, or its instructions were cleared while
@@ -224,9 +276,24 @@ async function cardNoticeForRun(ctx: ExtensionContext, memory: NoticeMemory) {
       && laneInstr === KANBAN_NO_LANE_INSTRUCTIONS
       && card !== null,
   });
-  memory.set(sessionId, { state: notice.state, seenAt: context.length });
-  if (sameState(prior, notice.state)) return undefined;
-  return { message: { customType: KANBAN_CARD_NOTICE_TYPE, content: notice.content, display: false, details: notice.state } };
+  const changed = !sameState(prior, notice.state);
+  const remembered = memory.get(sessionId);
+  const turns = 1 + (remembered !== undefined && remembered.seenAt <= context.length ? remembered.turns : 0);
+  const every = boardNotice.reminderTurns;
+  // A reminder is the card line once more, re-rendered: the lane it names is the
+  // current one, so the model can compare it against what it is doing. A session
+  // with no card is never reminded — there is no lane to keep in sync.
+  const reminder = !changed && every > 0 && turns >= every && card !== null
+    ? kanbanCardNoticeLine(snapshot.board.lanes, card, cardKey ?? card.id, boardNotice.template)
+    : null;
+  memory.set(sessionId, { state: notice.state, seenAt: context.length, turns: changed || reminder !== null ? 0 : turns });
+  if (changed) {
+    return { message: { customType: KANBAN_CARD_NOTICE_TYPE, content: notice.content, display: false, details: notice.state } };
+  }
+  if (reminder !== null) {
+    return { message: { customType: KANBAN_CARD_NOTICE_TYPE, content: reminder, display: false, details: notice.state } };
+  }
+  return undefined;
 }
 
 /** Normal sessions use the live persisted pin; children supply their snapshot/profile policy. */
@@ -282,7 +349,7 @@ export function createKanbanExtension(options?: { isReadOnly?: (ctx: ExtensionCo
             // leave the memory alone: the next run announces lanes and card together.
             const context = contextEntries(ctx);
             const prior = priorState(ctx, notices, sessionId, context);
-            if (prior !== undefined) notices.set(sessionId, { state: { ...prior, card: kanbanCardSignature(result.card) }, seenAt: context.length });
+            if (prior !== undefined) notices.set(sessionId, { state: { ...prior, card: kanbanCardSignature(result.card) }, seenAt: context.length, turns: 0 });
           }
           return toolResult(result);
         },

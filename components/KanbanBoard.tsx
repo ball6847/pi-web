@@ -32,12 +32,12 @@ import {
   normalizeKanbanPrefix,
 } from "@/lib/kanban-types";
 import { copyText } from "@/lib/clipboard";
-import { cardsOfLane, canRestInLane } from "@/lib/kanban-shared";
+import { cardsOfLane, canRestInLane, kanbanBoardNotice, kanbanNoticeValues, renderKanbanNoticeTemplate, KANBAN_NOTICE_TEMPLATE_DEFAULT } from "@/lib/kanban-shared";
 import { kanbanDescriptionExcerpt, normalizeKanbanQuery, searchKanbanBoard } from "@/lib/kanban-search";
 import { KanbanSearchField, KanbanSearchStyles, KanbanSearchText } from "./KanbanSearch";
 import { KanbanCardKeyChip } from "./KanbanCardKeyChip";
 import { kanbanSessionOptions, type KanbanSessionOption as SessionOption } from "@/lib/kanban-sessions";
-import { KANBAN_LANE_INSTRUCTIONS_MAX } from "@/lib/kanban-tool-limits";
+import { KANBAN_LANE_INSTRUCTIONS_MAX, KANBAN_NOTICE_TEMPLATE_MAX, KANBAN_REMINDER_TURNS_MAX } from "@/lib/kanban-tool-limits";
 import {
   kanbanAddCard,
   kanbanAddLane,
@@ -50,6 +50,7 @@ import {
   kanbanReorderLane,
   kanbanRenameLane,
   kanbanSetCardPrefix,
+  kanbanSetNotice,
   kanbanUnlinkCard,
   kanbanUpdateCard,
   useKanbanBoardStatus,
@@ -1409,6 +1410,33 @@ function LaneConfig({
   const { t } = useI18n();
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const [newName, setNewName] = useState("");
+  // The agent notice: the card line a run gets, and how often it is repeated.
+  const boardNotice = kanbanBoardNotice(board);
+  const [template, setTemplate] = useState(boardNotice.template);
+  const [turns, setTurns] = useState(String(boardNotice.reminderTurns));
+  useEffect(() => {
+    setTemplate(boardNotice.template);
+    setTurns(String(boardNotice.reminderTurns));
+  }, [boardNotice.template, boardNotice.reminderTurns]);
+  const saveTemplate = () => {
+    const next = template.slice(0, KANBAN_NOTICE_TEMPLATE_MAX);
+    setTemplate(next);
+    if (next === boardNotice.template) return;
+    kanbanSetNotice(projectDir, { template: next });
+  };
+  const saveTurns = () => {
+    const parsed = Number.parseInt(turns, 10);
+    const next = Number.isFinite(parsed) ? Math.min(KANBAN_REMINDER_TURNS_MAX, Math.max(0, parsed)) : boardNotice.reminderTurns;
+    setTurns(String(next));
+    if (next === boardNotice.reminderTurns) return;
+    kanbanSetNotice(projectDir, { reminderTurns: next });
+  };
+  // A card to preview the line on: the newest one with a session, else the newest
+  // card of any lane. No card on the board means there is nothing to show.
+  const previewCard = board.cards.find((card) => card.sessionId !== null) ?? board.cards[board.cards.length - 1] ?? null;
+  const preview = previewCard
+    ? renderKanbanNoticeTemplate(template, kanbanNoticeValues(board.lanes, previewCard, kanbanCardKey(board, previewCard)))
+    : "";
   // The card-key prefix: typed here, saved on Enter or blur like a lane's name.
   const [prefix, setPrefix] = useState(board.cardPrefix);
   useEffect(() => {
@@ -1540,6 +1568,89 @@ function LaneConfig({
             <p style={{ margin: 0, fontSize: 11, lineHeight: 1.6, color: "var(--text-dim)" }}>
               {t("kanban.configurePrefixHint")}
               {board.cardPrefixAliases?.length ? ` ${t("kanban.configurePrefixAliases", { list: board.cardPrefixAliases.join(", ") })}` : ""}
+            </p>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: "var(--text-dim)" }}>
+              {t("kanban.configureNotice")}
+            </span>
+            <textarea
+              value={template}
+              onChange={(event) => setTemplate(event.target.value)}
+              onBlur={saveTemplate}
+              onKeyDown={(event) => {
+                // Enter keeps the newline; Ctrl/Cmd+Enter saves, as the lane rows do.
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  event.currentTarget.blur();
+                }
+              }}
+              maxLength={KANBAN_NOTICE_TEMPLATE_MAX}
+              rows={3}
+              spellCheck={false}
+              placeholder={t("kanban.configureNoticeTemplatePlaceholder", { default: KANBAN_NOTICE_TEMPLATE_DEFAULT })}
+              aria-label={t("kanban.configureNoticeTemplate")}
+              data-kanban-notice-template
+              style={{
+                width: "100%",
+                minHeight: 54,
+                resize: "vertical",
+                padding: "6px 8px",
+                fontSize: 11.5,
+                lineHeight: 1.6,
+                fontFamily: "var(--font-mono)",
+                color: "var(--text-muted)",
+                background: "var(--bg)",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                outline: "none",
+                boxSizing: "border-box",
+              }}
+            />
+            <p style={{ margin: 0, fontSize: 11, lineHeight: 1.6, color: "var(--text-dim)" }}>
+              {t("kanban.configureNoticeTemplateHint")}
+            </p>
+            {preview && (
+              <p data-kanban-notice-preview style={{ margin: 0, padding: "6px 8px", fontSize: 11, lineHeight: 1.6, color: "var(--text-muted)", background: "var(--bg-hover)", borderRadius: 6, whiteSpace: "pre-wrap" }}>
+                {preview}
+              </p>
+            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <label htmlFor="kanban-notice-turns" style={{ fontSize: 11.5, color: "var(--text-muted)", flexShrink: 0 }}>
+                {t("kanban.configureNoticeReminder")}
+              </label>
+              <input
+                id="kanban-notice-turns"
+                value={turns}
+                inputMode="numeric"
+                autoComplete="off"
+                onChange={(event) => setTurns(event.target.value.replace(/[^0-9]/g, ""))}
+                onBlur={saveTurns}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    saveTurns();
+                    event.currentTarget.blur();
+                  }
+                }}
+                data-kanban-notice-turns
+                style={{
+                  width: 56,
+                  padding: "5px 8px",
+                  fontSize: 12,
+                  fontFamily: "var(--font-mono)",
+                  textAlign: "center",
+                  color: "var(--text)",
+                  background: "var(--bg)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  outline: "none",
+                }}
+              />
+              <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{t("kanban.configureNoticeReminderUnit")}</span>
+            </div>
+            <p style={{ margin: 0, fontSize: 11, lineHeight: 1.6, color: "var(--text-dim)" }}>
+              {t("kanban.configureNoticeReminderHint", { max: String(KANBAN_REMINDER_TURNS_MAX) })}
             </p>
           </div>
           {board.lanes.map((lane, index) => (

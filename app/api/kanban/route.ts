@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { KANBAN_COMMENT_MAX, KANBAN_LANE_INSTRUCTIONS_MAX } from "@/lib/kanban-tool-limits";
+import { KANBAN_COMMENT_MAX, KANBAN_LANE_INSTRUCTIONS_MAX, KANBAN_NOTICE_TEMPLATE_MAX, KANBAN_REMINDER_TURNS_MAX } from "@/lib/kanban-tool-limits";
 import { KANBAN_PREFIX_MAX, type KanbanBoardResponse, type KanbanRequest } from "@/lib/kanban-types";
 import {
   applyMutation,
@@ -33,6 +33,7 @@ import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security"
 //      move-lane { laneId, direction: -1|1 }           reorder-lane { laneId, toIndex }
 //      delete-lane { laneId }
 //      set-card-prefix { prefix }        (the board's card key: `PIW-42`)
+//      set-notice { template?, reminderTurns? }   (the run's card line, and its repeat)
 //
 // Every answer that is not a board is a typed refusal `{ error, code }`, never
 // a stack: 400 invalid (the request, the folder, a rule of the board), 403 for
@@ -56,6 +57,8 @@ const MAX_NAME = 500;
 const MAX_TEXT = 20_000;
 /** Lane instructions are injected into runs: capped where they are written. */
 const MAX_LANE_INSTRUCTIONS = KANBAN_LANE_INSTRUCTIONS_MAX;
+/** The notice template is injected into runs too, so its cap is the route's as well. */
+const MAX_NOTICE_TEMPLATE = KANBAN_NOTICE_TEMPLATE_MAX;
 
 function refusal(status: number, code: string, error: string) {
   return NextResponse.json({ error, code }, { status });
@@ -90,6 +93,16 @@ function optional(body: Record<string, unknown>, key: string, max: number): stri
   const value = body[key];
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "string" || value.length > max) throw new Invalid(`${key} must be a string of at most ${max} characters`);
+  return value;
+}
+
+/** The reminder's turn count: a whole number of turns, 0 (off) up to the cap. */
+function optionalTurns(body: Record<string, unknown>, key: string, max: number): number | undefined {
+  const value = body[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > max) {
+    throw new Invalid(`${key} must be a whole number of turns from 0 to ${max}`);
+  }
   return value;
 }
 
@@ -174,6 +187,12 @@ function readAction(body: Record<string, unknown>): KanbanRequest {
       return { action: "delete-lane", laneId: required(body, "laneId", MAX_ID) };
     case "set-card-prefix":
       return { action: "set-card-prefix", prefix: required(body, "prefix", KANBAN_PREFIX_MAX) };
+    case "set-notice": {
+      const template = optional(body, "template", MAX_NOTICE_TEMPLATE);
+      const reminderTurns = optionalTurns(body, "reminderTurns", KANBAN_REMINDER_TURNS_MAX);
+      if (template === undefined && reminderTurns === undefined) throw new Invalid("set-notice needs a template or reminderTurns");
+      return { action: "set-notice", template, reminderTurns };
+    }
     // A card's comments are written through this one route too (one lock, one
     // queue, one revision), but they live in their own table and their own read.
     case "add-comment":

@@ -714,3 +714,38 @@ test("a refused mutation on a bare project still materializes the fresh board", 
   assert.equal(rev.status, 200);
   assert.ok(rev.body.revision > 0, "the write left a revision behind");
 });
+
+test("set-notice: the card line's template and the reminder's turn count, validated and capped", async (t) => {
+  const f = fixture(t);
+  await get(f.project);
+
+  const stored = await post({ cwd: f.project, action: "set-notice", template: "Card {cardKey} is in {lane}.", reminderTurns: 5 });
+  assert.equal(stored.status, 200);
+  assert.deepEqual(stored.body.board.notice, { template: "Card {cardKey} is in {lane}.", reminderTurns: 5 });
+  // One field is enough: the dialog's textarea and number field save separately.
+  const turnsOnly = await post({ cwd: f.project, action: "set-notice", reminderTurns: 0 });
+  assert.equal(turnsOnly.status, 200);
+  assert.deepEqual(turnsOnly.body.board.notice, { template: "Card {cardKey} is in {lane}.", reminderTurns: 0 });
+
+  // Neither field, and every turn count a reminder cannot use.
+  const neither = await post({ cwd: f.project, action: "set-notice" });
+  assert.equal(neither.status, 400);
+  assert.equal(neither.body.code, "invalid-request");
+  for (const reminderTurns of [-1, 1.5, "5", 101]) {
+    const bad = await post({ cwd: f.project, action: "set-notice", reminderTurns });
+    assert.equal(bad.status, 400, `${JSON.stringify(reminderTurns)} must be refused`);
+    assert.equal(bad.body.code, "invalid-request");
+  }
+
+  // The template is injected into runs: capped where it is written.
+  const tooLong = await post({ cwd: f.project, action: "set-notice", template: "x".repeat(1201) });
+  assert.equal(tooLong.status, 400);
+  assert.equal(tooLong.body.code, "invalid-request");
+  const atCap = await post({ cwd: f.project, action: "set-notice", template: "x".repeat(1200) });
+  assert.equal(atCap.status, 200);
+
+  // Both empty drops the field: the board reads as one that never stored a notice.
+  const cleared = await post({ cwd: f.project, action: "set-notice", template: "", reminderTurns: 0 });
+  assert.equal(cleared.status, 200);
+  assert.equal("notice" in cleared.body.board, false);
+});
