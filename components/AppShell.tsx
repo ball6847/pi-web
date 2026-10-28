@@ -460,6 +460,7 @@ export function AppShell() {
   // Single active panel — only one dropdown open at a time
   const [activeTopPanel, setActiveTopPanel] = useState<"agents" | "branches" | "system" | "tools" | "session" | null>(null);
   const [topPanelPos, setTopPanelPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const topPanelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!sessionHasBranches) {
@@ -596,6 +597,22 @@ export function AppShell() {
     ro.observe(topBarRef.current);
     return () => ro.disconnect();
   }, [activeTopPanel, isMobile]);
+
+  // A top-panel dropdown is a picker, not a mode: a pointerdown outside it
+  // closes it. The top bar is the panel's anchor — its buttons toggle or
+  // replace the panel themselves, so a pointerdown there is left to their
+  // click handlers (closing here first would make a toggle re-open it).
+  useEffect(() => {
+    if (!activeTopPanel) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const path = event.composedPath();
+      if (topPanelRef.current && path.includes(topPanelRef.current)) return;
+      if (topBarRef.current && path.includes(topBarRef.current)) return;
+      setActiveTopPanel(null);
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () => document.removeEventListener("pointerdown", handlePointerDown, true);
+  }, [activeTopPanel]);
 
   // Files unmount when inactive; workspace terminals stay mounted until closed.
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
@@ -944,6 +961,10 @@ export function AppShell() {
     // tab's) session on mount must leave a `?board=` view up, or a reload of the
     // board would land back on the chat.
     if (!isRestore) setCenterView("chat");
+    // A pick is also the answer to an open top-panel dropdown (the agent
+    // switcher): the user chose a session, so the picker closes. The subagent
+    // hand-over (handleOpenSubagentParentChat) reopens it after this returns.
+    if (!isRestore) setActiveTopPanel(null);
     setSearchTarget(entryId ? { sessionId: session.id, entryId, blockIndex } : null);
     invalidateWorkspaceRestore();
     const activeDraftKey = activeNewSessionDraftKeyRef.current;
@@ -2843,7 +2864,7 @@ export function AppShell() {
           )}
           {/* Top panel dropdown — shared, only one active at a time */}
           {activeTopPanel && topPanelPos && (
-            <div style={{
+            <div ref={topPanelRef} style={{
               position: "fixed",
               top: topPanelPos.top,
               left: topPanelPos.left,
