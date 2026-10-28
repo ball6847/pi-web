@@ -1634,13 +1634,19 @@ export function AppShell() {
       : { kind: "attach", projectDir: composerBoardDir, cardId: pick.cardId, cardTitle: pick.cardTitle });
   }, [composerBoardDir]);
 
-  // "Start session" from the board's card menu: open the fresh composer for
-  // the board's project with the card's text as starting draft, and attach
-  // the session to this card when it is created. Nothing is written to the
-  // board until the session really exists: abandoning the composer (another
-  // pick, another card, selecting a session) clears the pending choice.
-  const handleKanbanStartSession = useCallback((card: KanbanCard) => {
-    const dir = boardProjectDir;
+  // "Start session" from the board's card menu and from a card detail tab:
+  // open the fresh composer for the card's board with the card's text as
+  // starting draft, and attach the session to this card when it is created.
+  // Nothing is written to the board until the session really exists:
+  // abandoning the composer (another pick, another card, selecting a session)
+  // clears the pending choice.
+  //
+  // `projectDir` is the card's own board, not the board view's: a card tab stays
+  // open while another project's board is on screen, and the attach must land
+  // on the board the card lives on. A backlog card is allowed — the attach
+  // advances it one lane first (the backlog takes no session).
+  const handleKanbanStartSession = useCallback((card: KanbanCard, projectDir?: string) => {
+    const dir = projectDir ?? boardProjectDir;
     if (!dir) return;
     const context = sidebarNewSessionContext;
     const sameProject = context?.project.root === dir;
@@ -3339,7 +3345,7 @@ export function AppShell() {
               awaitingInputSessionIds={awaitingInputSessionIds}
               unreadSessionIds={unreadSessionIds}
               onOpenSession={handleKanbanOpenSession}
-              onStartSession={handleKanbanStartSession}
+              onStartSession={(card) => handleKanbanStartSession(card, activeCardTab.projectDir)}
               onCardCreated={(cardId, title) => handleKanbanCardCreated(activeCardTab.id, cardId, title)}
               onCardDeleted={() => handleCloseFileTab(activeCardTab.id)}
               onTitleChange={(title) => handleKanbanCardTitle(activeCardTab.id, title)}

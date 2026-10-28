@@ -78,6 +78,24 @@ function relativeTime(timestamp: number, now = Date.now()): string {
   return RELATIVE.format(Math.round(seconds / 31_536_000), "year");
 }
 
+/**
+ * The backlog's session line. A card there cannot hold a session, so the row is
+ * one action and its consequence: "Start session → Todo" (the arrow says what
+ * the attach will do, the tooltip says why). With no work lane to move the card
+ * into there is nothing to start, and the row falls back to the plain rule.
+ */
+function backlogSessionLine(
+  t: ReturnType<typeof useI18n>["t"],
+  nextLaneName: string | null,
+): { hintLabel: string | null; hintTitle: string; moveLabel: string | null; moveTitle: string } {
+  return {
+    hintLabel: nextLaneName ? null : t("kanban.detailBacklogHint"),
+    hintTitle: t("kanban.backlogNoSessions"),
+    moveLabel: nextLaneName ? t("kanban.detailStartMovesTo", { lane: nextLaneName }) : null,
+    moveTitle: nextLaneName ? t("kanban.detailBacklogStartHint", { lane: nextLaneName }) : "",
+  };
+}
+
 const SECTION_LABEL: React.CSSProperties = {
   fontSize: 10,
   fontWeight: 600,
@@ -491,6 +509,10 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
   const awaiting = card?.sessionId ? awaitingInputSessionIds.has(card.sessionId) : false;
   const running = card?.sessionId ? runningSessionIds.has(card.sessionId) : false;
   const unread = card?.sessionId ? unreadSessionIds.has(card.sessionId) : false;
+  const nextLaneName = lane ? laneOptions[laneOptions.findIndex((entry) => entry.id === lane.id) + 1]?.name ?? null : null;
+  const backlog = backlogSessionLine(t, nextLaneName);
+  const canStartSession = Boolean(card && !card.sessionId && (!backlogOnly || nextLaneName));
+
   const activityLabel = awaiting
     ? t("sidebar.agentAwaitingInput")
     : running
@@ -685,9 +707,11 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
               {activityLabel && <span style={{ fontSize: 10, color: "var(--text-dim)", flexShrink: 0 }}>· {activityLabel}</span>}
             </button>
           ) : backlogOnly ? (
-            <span style={{ ...CHIP, cursor: "default" }} title={t("kanban.backlogNoSessions")}>
-              {t("kanban.detailBacklogHint")}
-            </span>
+            backlog.hintLabel && (
+              <span style={{ ...CHIP, cursor: "default" }} title={backlog.hintTitle}>
+                {backlog.hintLabel}
+              </span>
+            )
           ) : (
             <label style={{ ...CHIP, paddingRight: 6, gap: 6 }}>
               <select
@@ -739,17 +763,35 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
               {t("kanban.detailUnlink")}
             </button>
           )}
-          {card && !card.sessionId && !backlogOnly && (
+          {card && canStartSession && (
             <button
               type="button"
               onClick={() => onStartSession(card)}
-              style={{ ...SEGMENT_BASE, color: "var(--accent)" }}
+              style={{
+                ...SEGMENT_BASE,
+                padding: "3px 10px",
+                borderRadius: 999,
+                color: "var(--accent)",
+                background: "color-mix(in srgb, var(--accent) 10%, transparent)",
+                border: "1px solid color-mix(in srgb, var(--accent) 38%, transparent)",
+                fontWeight: 600,
+              }}
             >
               {t("kanban.detailStartSession")}
             </button>
           )}
+          {/* A backlog card has no session slot to fill: the start button is the
+              whole control, and the arrow says where the attach will put it. */}
+          {card && canStartSession && backlogOnly && backlog.moveLabel && (
+            <span
+              title={backlog.moveTitle}
+              style={{ fontSize: 10.5, color: "var(--text-muted)", whiteSpace: "nowrap", cursor: "default" }}
+            >
+              {backlog.moveLabel}
+            </span>
+          )}
           {card && (
-            <span style={{ fontSize: 10.5, color: "var(--text-dim)" }}>
+            <span style={{ fontSize: 10.5, color: "var(--text-dim)", marginLeft: "auto" }}>
               {t("kanban.detailUpdated", { time: relativeTime(card.updatedAt) })}
             </span>
           )}
