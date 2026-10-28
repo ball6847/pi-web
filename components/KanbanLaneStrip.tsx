@@ -56,12 +56,19 @@ export function KanbanLaneStrip({
   if (!board) return null;
 
   const currentLane = card ? laneIndex(board, card.laneId) : -1;
+  // An attached card lands where the attach puts it: a backlog card advances
+  // one lane first (the backlog never takes a session), so the pill marks the
+  // lane the card will be in, not the fixed lane it is leaving.
   const pendingLaneIndex = !card && pending && pending.kind !== "off"
-    ? board.lanes.findIndex((l) => l.id === (
-      pending.kind === "new-card"
-        ? pending.laneId
-        : board.cards.find((c) => c.id === pending.cardId)?.laneId
-    ))
+    ? pending.kind === "new-card"
+      ? board.lanes.findIndex((l) => l.id === pending.laneId)
+      : (() => {
+        const attached = board.cards.find((c) => c.id === pending.cardId);
+        if (!attached) return -1;
+        const index = laneIndex(board, attached.laneId);
+        if (index < 0 || !board.lanes[index]?.fixed) return index;
+        return index + 1 < board.lanes.length ? index + 1 : -1;
+      })()
     : -1;
   // The pill only highlights when the lane resolves (a pending card deleted
   // on another device leaves just the label); the pending state itself shows.

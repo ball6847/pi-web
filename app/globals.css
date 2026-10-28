@@ -358,6 +358,22 @@ body {
   flex-direction: column;
 }
 
+/* The remaining native <select>s (settings form rows, Agents, MCP): the browser
+   paints their option list outside the <select>'s own box, so the rows inherit
+   the theme's ink without its surface — on a dark theme that is light text on
+   the light default popup. Name both, per theme. Chromium still uses its own
+   popup surface (author option backgrounds are honored by Firefox and Safari
+   only), which is why the card detail's lane and session pickers are portaled
+   CardMenus instead of native selects (components/KanbanCardDetail.tsx). */
+select option {
+  background-color: var(--bg-panel);
+  color: var(--text);
+}
+
+select option:disabled {
+  color: var(--text-dim);
+}
+
 /* Light text on a dark background renders heavier with subpixel smoothing
    (macOS); grayscale smoothing keeps it at the light theme's weight. */
 html.dark {

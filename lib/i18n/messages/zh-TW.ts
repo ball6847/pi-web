@@ -1537,6 +1537,8 @@ export const zhTWLocale: LocalePlugin = {
     "kanban.detailStartSession": "啟動工作階段",
     "kanban.detailUnlink": "取消連結",
     "kanban.detailBacklogHint": "待辦池不放入工作階段",
+    "kanban.detailBacklogStartHint": "待辦區不放入工作階段 —— 啟動工作階段會把這張卡移到「{lane}」",
+    "kanban.detailStartMovesTo": "→「{lane}」",
     "kanban.detailTitlePlaceholder": "卡片標題",
     "kanban.detailDescription": "描述",
     "kanban.detailDescriptionPlaceholder": "這張卡需要做什麼 —— 支援 Markdown，Ctrl+Enter 儲存",

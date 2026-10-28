@@ -1537,6 +1537,8 @@ export const zhCNLocale: LocalePlugin = {
     "kanban.detailStartSession": "启动会话",
     "kanban.detailUnlink": "取消关联",
     "kanban.detailBacklogHint": "待办池不放会话",
+    "kanban.detailBacklogStartHint": "待办区不放会话 —— 启动会话会把这张卡移到「{lane}」",
+    "kanban.detailStartMovesTo": "→「{lane}」",
     "kanban.detailTitlePlaceholder": "卡片标题",
     "kanban.detailDescription": "描述",
     "kanban.detailDescriptionPlaceholder": "这张卡需要做什么 —— 支持 Markdown，Ctrl+Enter 保存",
