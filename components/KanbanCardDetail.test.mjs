@@ -59,6 +59,7 @@ function setup() {
     kanbanSessionOptions,
     MarkdownBody: "MarkdownBody",
     SpinnerIcon: "SpinnerIcon",
+    CardMenu: "CardMenu",
   });
   for (const name of [
     "kanbanAddCard",
@@ -127,8 +128,16 @@ function moveLabel(view) {
   )[0] ?? null;
 }
 function sessionPicker(view) {
-  return all(view.result, (node) => node.type === "select" && node.props["aria-label"] === "kanban.detailSession")[0] ?? null;
+  return all(view.result, (node) => node.type === "button" && node.props["data-kanban-detail-session"] === true)[0] ?? null;
 }
+function lanePicker(view) {
+  return all(view.result, (node) => node.type === "button" && node.props["data-kanban-detail-lane"] === true)[0] ?? null;
+}
+function menu(view) {
+  return all(view.result, (node) => node.type === "CardMenu")[0] ?? null;
+}
+/** A press on a chip picker: the menu opens over the control's box. */
+const press = { currentTarget: { getBoundingClientRect: () => ({ x: 10, y: 10, width: 80, height: 20, top: 10, left: 10, right: 90, bottom: 30 }) } };
 function boardOf(cards) {
   return { projectDir: "/project", cardPrefix: "PIW", lanes: [backlog, todo], cards };
 }
@@ -171,6 +180,7 @@ test("a card in a work lane keeps its picker and its start button", (t) => {
   const view = ui.render(boardOf([card("lane-todo")]));
 
   assert.ok(sessionPicker(view), "a work lane offers the link picker");
+  assert.equal(all(view.result, (node) => node.type === "select").length, 0, "no native select anywhere: its option list cannot be themed");
   const button = startButton(view);
   assert.ok(button);
   assert.equal(moveLabel(view), null, "a work-lane card is linked where it sits: no lane to name");
@@ -185,4 +195,48 @@ test("a linked card offers open and unlink, never a second start", (t) => {
 
   assert.equal(startButton(view), null, "one session, one card: a linked card starts nothing");
   assert.ok(all(view.result, (node) => node.type === "button" && node.props.title === "kanban.detailOpenSession")[0]);
+});
+
+test("the lane picker is a themed menu: every lane, the refused ones disabled with the rule", (t) => {
+  const ui = setup();
+  t.after(() => ui.cleanup());
+  // A linked card cannot go back to the backlog; the refusal names the rule.
+  const view = ui.render(boardOf([card("lane-todo", { sessionId: session.id, sessionTitle: session.name })]));
+
+  lanePicker(view).props.onClick(press);
+  view.flush();
+  const entries = [...menu(view).props.entries];
+  assert.deepEqual(entries.map((entry) => entry.label), ["Backlog", "Todo"]);
+  const backlogEntry = entries[0];
+  assert.equal(backlogEntry.disabled, true, "a linked card cannot rest in the backlog");
+  assert.equal(backlogEntry.disabledTitle, "kanban.backlogNoSessions");
+  assert.equal(entries[1].disabled, false, "the lane it already sits in stays a choice");
+  entries[1].onSelect();
+  assert.deepEqual(ui.calls, [["kanbanMoveCard", "/project", "card-1", "lane-todo"]], "a pick is the board's own move");
+});
+
+test("the session picker is a themed menu: the project's sessions, and the way back to none", (t) => {
+  const ui = setup();
+  t.after(() => ui.cleanup());
+  const view = ui.render(boardOf([card("lane-todo")]));
+
+  sessionPicker(view).props.onClick(press);
+  view.flush();
+  // Nothing linked yet, so there is nothing to clear.
+  assert.deepEqual([...menu(view).props.entries].map((entry) => entry.label), ["A session"]);
+  menu(view).props.entries[0].onSelect();
+  assert.deepEqual(ui.calls, [["kanbanLinkCard", "/project", "card-1", "session-1", "A session"]]);
+});
+
+test("a project with no sessions says so in the session menu instead of opening empty", (t) => {
+  const ui = setup();
+  t.after(() => ui.cleanup());
+  const view = ui.render(boardOf([card("lane-todo")]), { sessions: [] });
+
+  sessionPicker(view).props.onClick(press);
+  view.flush();
+  const entries = [...menu(view).props.entries];
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].label, "kanban.cardFormSessionRequired");
+  assert.equal(entries[0].disabled, true);
 });

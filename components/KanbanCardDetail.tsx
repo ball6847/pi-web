@@ -15,6 +15,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useI18n } from "@/hooks/useI18n";
 import { MarkdownBody } from "./MarkdownBody";
 import { SpinnerIcon } from "./SidebarIcons";
+import { CardMenu, type MenuEntry } from "./KanbanBoard";
 import {
   kanbanAddCard,
   kanbanAddCardComment,
@@ -433,6 +434,12 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
   const [draftLane, setDraftLane] = useState<string | null>(draftLaneId);
   const [draftSession, setDraftSession] = useState<string | null>(null);
   const [commentText, setCommentText] = useState("");
+  // The lane and session pickers are themed popups (CardMenu), not native
+  // <select>s: a native option list is painted by the browser outside the
+  // control's box, so it keeps the platform's light surface under a dark
+  // theme's light ink. These anchors are the chip each popup hangs off.
+  const [laneMenuAnchor, setLaneMenuAnchor] = useState<DOMRect | null>(null);
+  const [sessionMenuAnchor, setSessionMenuAnchor] = useState<DOMRect | null>(null);
   const lastSynced = useRef("");
   const titleRef = useRef<HTMLInputElement | null>(null);
 
@@ -534,6 +541,59 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
     setCommentText("");
   };
 
+  // The lane picker: every lane, the ones the rules refuse disabled with the
+  // reason as the hover text — the same gate the board's card menu uses.
+  const laneMenuEntries: MenuEntry[] = laneOptions.map((entry) => {
+    const current = card ? entry.id === card.laneId : entry.id === draftLaneEntry?.id;
+    const refused = card && !current && !canRestInLane(card, entry);
+    return {
+      id: entry.id,
+      label: entry.name,
+      disabled: Boolean(refused),
+      disabledTitle: refused ? t(entry.fixed ? "kanban.backlogNoSessions" : "kanban.menuMoveToSessionless") : undefined,
+      onSelect: () => {
+        if (draft) setDraftLane(entry.id);
+        else if (card) kanbanMoveCard(projectDir, card.id, entry.id);
+      },
+    };
+  });
+  // The session picker: the project's sessions, plus the way back to none.
+  const sessionMenuEntries: MenuEntry[] = [];
+  if (draft ? draftSession !== null : Boolean(card?.sessionId)) {
+    sessionMenuEntries.push({
+      id: "none",
+      label: t("kanban.detailNoSession"),
+      onSelect: () => {
+        if (draft) setDraftSession(null);
+        else if (card) kanbanUnlinkCard(projectDir, card.id);
+      },
+    });
+  }
+  for (const option of sessionOptions) {
+    sessionMenuEntries.push({
+      id: option.id,
+      label: `${option.running ? "● " : ""}${option.title}`,
+      onSelect: () => {
+        if (draft) setDraftSession(option.id);
+        else if (card) kanbanLinkCard(projectDir, card.id, option.id, option.title);
+      },
+    });
+  }
+  if (sessionOptions.length === 0) {
+    sessionMenuEntries.push({
+      id: "empty",
+      label: t("kanban.cardFormSessionRequired"),
+      disabled: true,
+      onSelect: () => {},
+    });
+  }
+  // The picked session's name, or "No session yet". An unlinked card keeps the
+  // old sessionTitle as a snapshot (the board's rule), so only a live link may
+  // name one — otherwise the picker would claim a session the card no longer has.
+  const sessionLabel = (draft
+    ? sessionOptions.find((option) => option.id === draftSession)?.title
+    : card?.sessionId ? card.sessionTitle : null) ?? t("kanban.detailNoSession");
+
   const createCard = () => {
     const trimmed = title.trim();
     if (!trimmed || !draftLaneEntry) return;
@@ -557,41 +617,24 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "12px 16px 18px" }}>
         {/* Header: the lane it rests in, and the way out. */}
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 5, ...CHIP, paddingRight: 7 }}>
+          <button
+            type="button"
+            data-kanban-detail-lane
+            aria-label={t("kanban.detailLane")}
+            aria-haspopup="menu"
+            aria-expanded={laneMenuAnchor !== null}
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              setLaneMenuAnchor((current) => (current ? null : rect));
+            }}
+            style={{ display: "inline-flex", alignItems: "center", gap: 5, ...CHIP, paddingRight: 7 }}
+          >
             <KanbanGlyph size={12} />
-            <select
-              value={card ? card.laneId : draftLaneEntry?.id ?? ""}
-              onChange={(event) => {
-                const laneId = event.target.value;
-                if (draft) setDraftLane(laneId);
-                else if (card) kanbanMoveCard(projectDir, card.id, laneId);
-              }}
-              aria-label={t("kanban.detailLane")}
-              style={{
-                appearance: "none",
-                border: "none",
-                background: "transparent",
-                color: "var(--text)",
-                fontSize: 11,
-                fontWeight: 500,
-                cursor: "pointer",
-                padding: "0 2px",
-                outline: "none",
-                maxWidth: 170,
-              }}
-            >
-              {laneOptions.map((entry) => (
-                <option
-                  key={entry.id}
-                  value={entry.id}
-                  disabled={card ? entry.id !== card.laneId && !canRestInLane(card, entry) : false}
-                >
-                  {entry.name}
-                </option>
-              ))}
-            </select>
+            <span style={{ color: "var(--text)", fontSize: 11, fontWeight: 500, maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {card ? lane?.name ?? "" : draftLaneEntry?.name ?? ""}
+            </span>
             <CaretIcon />
-          </label>
+          </button>
           {!draft && card && board && (
             <button
               type="button"
@@ -713,45 +756,23 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
               </span>
             )
           ) : (
-            <label style={{ ...CHIP, paddingRight: 6, gap: 6 }}>
-              <select
-                value={draft ? draftSession ?? "" : card?.sessionId ?? ""}
-                onChange={(event) => {
-                  const sessionId = event.target.value;
-                  if (draft) {
-                    setDraftSession(sessionId || null);
-                    return;
-                  }
-                  if (!card) return;
-                  if (!sessionId) {
-                    kanbanUnlinkCard(projectDir, card.id);
-                    return;
-                  }
-                  const option = sessionOptions.find((entry) => entry.id === sessionId);
-                  if (option) kanbanLinkCard(projectDir, card.id, option.id, option.title);
-                }}
-                aria-label={t("kanban.detailSession")}
-                style={{
-                  appearance: "none",
-                  border: "none",
-                  background: "transparent",
-                  color: "var(--text-muted)",
-                  fontSize: 11,
-                  cursor: "pointer",
-                  padding: 0,
-                  outline: "none",
-                  maxWidth: 190,
-                }}
-              >
-                <option value="">{t("kanban.detailNoSession")}</option>
-                {sessionOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.running ? "● " : ""}{option.title}
-                  </option>
-                ))}
-              </select>
+            <button
+              type="button"
+              data-kanban-detail-session
+              aria-label={t("kanban.detailSession")}
+              aria-haspopup="menu"
+              aria-expanded={sessionMenuAnchor !== null}
+              onClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setSessionMenuAnchor((current) => (current ? null : rect));
+              }}
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, maxWidth: 220, background: "none", border: "none", padding: 0, color: "var(--text-muted)", fontSize: 11, cursor: "pointer", textAlign: "left" }}
+            >
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {sessionLabel}
+              </span>
               <CaretIcon />
-            </label>
+            </button>
           )}
           {card?.sessionId && (
             <button
@@ -1055,6 +1076,15 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
           )}
         </div>
       </div>
+      {/* Themed pickers over the plain <select>s these replace: a native option
+          list is painted outside the control's box and keeps the platform's
+          light surface under a dark theme's ink. */}
+      {laneMenuAnchor && (
+        <CardMenu anchor={laneMenuAnchor} entries={laneMenuEntries} onClose={() => setLaneMenuAnchor(null)} />
+      )}
+      {sessionMenuAnchor && (
+        <CardMenu anchor={sessionMenuAnchor} entries={sessionMenuEntries} onClose={() => setSessionMenuAnchor(null)} />
+      )}
     </div>
   );
 }
