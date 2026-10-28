@@ -1,21 +1,28 @@
-import type { KanbanBoard, KanbanCard } from "./kanban-types";
+import { kanbanCardKey, type KanbanBoard, type KanbanCard } from "./kanban-types";
 
 export function normalizeKanbanQuery(query: string): string {
   return query.trim().toLowerCase();
 }
 
-/** Fields stay separate: no match can straddle title and description. */
-export function cardMatchesQuery(card: Pick<KanbanCard, "title" | "description">, query: string): boolean {
+/**
+ * Fields stay separate: no match can straddle title and description. A card's
+ * key (`PIW-42`) is searchable too — typing the reference a commit message
+ * carries is the fastest way to find the card.
+ */
+export function cardMatchesQuery(card: Pick<KanbanCard, "title" | "description">, query: string, key?: string): boolean {
   const needle = normalizeKanbanQuery(query);
-  return !needle || card.title.toLowerCase().includes(needle) || card.description.toLowerCase().includes(needle);
+  if (!needle) return true;
+  if (card.title.toLowerCase().includes(needle) || card.description.toLowerCase().includes(needle)) return true;
+  return key ? key.toLowerCase().includes(needle) : false;
 }
 
 /** A view projection, never a replacement board for a mutation or configuration. */
 export function searchKanbanBoard(board: KanbanBoard, query: string, editingCardId?: string | null) {
   const needle = normalizeKanbanQuery(query);
+  const matchesCard = (card: KanbanCard) => cardMatchesQuery(card, needle, kanbanCardKey(board, card));
   const lanes = board.lanes.map((lane) => {
     const all = board.cards.filter((card) => card.laneId === lane.id);
-    const cards = all.filter((card) => cardMatchesQuery(card, needle));
+    const cards = all.filter(matchesCard);
     const matches = new Set(cards.map((card) => card.id));
     return {
       lane,
