@@ -11,7 +11,7 @@
 // The board cache owns every write (`lib/kanban.ts`); the page keeps the draft
 // text. Nothing here talks to a route.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useI18n } from "@/hooks/useI18n";
 import { MarkdownBody } from "./MarkdownBody";
 import { SpinnerIcon } from "./SidebarIcons";
@@ -25,11 +25,12 @@ import {
   kanbanUnlinkCard,
   kanbanUpdateCard,
   useKanbanBoard,
+  useKanbanCardActivity,
   useKanbanCardComments,
 } from "@/lib/kanban";
 import { canRestInLane } from "@/lib/kanban-shared";
 import { kanbanSessionOptions } from "@/lib/kanban-sessions";
-import type { KanbanCard } from "@/lib/kanban-types";
+import type { KanbanActivity, KanbanActivityKind, KanbanCard } from "@/lib/kanban-types";
 import type { SessionInfo } from "@/lib/types";
 import type { KanbanComment } from "@/lib/kanban-types";
 
@@ -160,6 +161,7 @@ function CommentEntry({
       style={{
         listStyle: "none",
         position: "relative",
+        marginLeft: 24,
         padding: "9px 10px",
         background: agent ? "var(--bg-panel)" : "var(--bg)",
         border: "1px solid var(--border)",
@@ -216,6 +218,169 @@ function CommentEntry({
       </div>
     </li>
   );
+}
+
+const STRONG_VALUE: React.CSSProperties = { color: "var(--text)", fontWeight: 500 };
+const DIM_VALUE: React.CSSProperties = { color: "var(--text-dim)" };
+
+/**
+ * A translated sentence with one value emphasized, without handing the locale a
+ * format string: the template is split on its `{token}` and the value goes in
+ * as an element. Word order stays the translator's business.
+ */
+function renderTemplate(template: string, token: string, value: string, style: React.CSSProperties): React.ReactNode {
+  const parts = template.split(token);
+  if (parts.length === 1) return template;
+  return (
+    <>
+      {parts.map((part, index) => (
+        <Fragment key={index}>
+          {index > 0 && <span style={style}>{value}</span>}
+          {part}
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
+const ACTIVITY_GLYPH: Record<KanbanActivityKind, React.ReactNode> = {
+  created: <path d="M12 5v14M5 12h14" />,
+  moved: <path d="M5 12h13M12 6l6 6-6 6" />,
+  title: <path d="M6 5h12M12 5v14" />,
+  description: <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />,
+  linked: <path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1" />,
+  unlinked: <path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1M4 4l16 16" />,
+  "lane-deleted": <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" />,
+};
+
+/**
+ * One automatic entry of the card's history: a 22 px line on the timeline's
+ * rail. No background, border or box — that is what keeps the authored notes
+ * (`CommentEntry` cards) reading as content and the motions as the frame.
+ */
+function ActivityRow({ event, showTime }: { event: KanbanActivity; showTime: boolean }) {
+  const { t } = useI18n();
+  const accent = event.kind === "moved" || event.kind === "lane-deleted";
+  const lane = (value: string | null) => value ?? "—";
+  return (
+    <li
+      data-kanban-activity-row={event.kind}
+      style={{ listStyle: "none", position: "relative", paddingLeft: 24, minHeight: 20, display: "flex", alignItems: "baseline", gap: 8 }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 1,
+          width: 15,
+          height: 15,
+          borderRadius: 999,
+          background: "var(--bg)",
+          color: accent ? "var(--accent)" : "var(--text-dim)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          {ACTIVITY_GLYPH[event.kind]}
+        </svg>
+      </span>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.45, color: "var(--text-muted)", overflowWrap: "anywhere" }}>
+        {event.kind === "created" ? renderTemplate(t("kanban.activityCreated"), "{lane}", lane(event.to), STRONG_VALUE) : null}
+        {event.kind === "moved" ? (
+          <>
+            {renderTemplate(t("kanban.activityMoved"), "{lane}", lane(event.to), STRONG_VALUE)}{" "}
+            {renderTemplate(t("kanban.activityFrom"), "{lane}", lane(event.from), DIM_VALUE)}
+          </>
+        ) : null}
+        {event.kind === "title" ? (
+          <>
+            {t("kanban.activityTitleChanged")}{" "}
+            {renderTemplate(t("kanban.activityOldTitle"), "{title}", event.from ?? "", DIM_VALUE)}
+          </>
+        ) : null}
+        {event.kind === "description" ? t("kanban.activityDescriptionUpdated") : null}
+        {event.kind === "linked" ? (
+          <>
+            {t("kanban.activityLinked")}
+            {event.to ? <SessionChip label={event.to} /> : null}
+          </>
+        ) : null}
+        {event.kind === "unlinked" ? (
+          <>
+            {t("kanban.activityUnlinked")}
+            {event.from ? <SessionChip label={event.from} /> : null}
+          </>
+        ) : null}
+        {event.kind === "lane-deleted" ? (
+          <>
+            {renderTemplate(t("kanban.activityLaneDeleted"), "{lane}", lane(event.from), STRONG_VALUE)}{" "}
+            {renderTemplate(t("kanban.activityLaneDeletedTo"), "{lane}", lane(event.to), STRONG_VALUE)}
+          </>
+        ) : null}
+        {event.actorSessionId ? (
+          <span style={{ color: "var(--text-dim)" }}>
+            {" · "}
+            {t("kanban.activityVia", { session: event.actorSessionTitle || event.actorSessionId })}
+          </span>
+        ) : null}
+      </span>
+      <span style={{ fontSize: 10, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", flexShrink: 0 }}>
+        {showTime ? relativeTime(event.createdAt) : ""}
+      </span>
+    </li>
+  );
+}
+
+/** The session a `linked` / `unlinked` row names, in the board's chip shape. */
+function SessionChip({ label }: { label: string }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        maxWidth: 200,
+        marginLeft: 6,
+        padding: "0 7px",
+        border: "1px solid color-mix(in srgb, var(--accent) 35%, transparent)",
+        borderRadius: 999,
+        background: "color-mix(in srgb, var(--accent) 10%, transparent)",
+        fontSize: 10.5,
+        color: "var(--text-muted)",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        verticalAlign: "baseline",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+/** Consecutive events from one actor inside this window share one time label. */
+const ACTIVITY_GROUP_MS = 10 * 60 * 1000;
+
+/** One line of the merged journal: an authored note, or a derived change. */
+type TimelineItem =
+  | { key: string; at: number; kind: "activity"; event: KanbanActivity }
+  | { key: string; at: number; kind: "comment"; comment: KanbanComment };
+
+const activityActor = (event: KanbanActivity): string => event.actorSessionId ?? "user";
+
+/**
+ * A burst of same-actor events inside `ACTIVITY_GROUP_MS` shares one time label:
+ * the last row of the run carries it, so a drag-then-edit does not read as three
+ * separate "now"s. Render-only — storage keeps one row per event.
+ */
+function shouldShowActivityTime(timeline: TimelineItem[], index: number): boolean {
+  const item = timeline[index];
+  if (item.kind !== "activity") return true;
+  const next = timeline[index + 1];
+  if (!next || next.kind !== "activity") return true;
+  return !(activityActor(next.event) === activityActor(item.event) && next.at - item.at < ACTIVITY_GROUP_MS);
 }
 
 export function KanbanCardDetail(props: KanbanCardDetailProps) {
@@ -277,6 +442,19 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
   // The card's thread: its own read, refetched when the board revision moves —
   // so a note the agent writes appears without a reload.
   const comments = useKanbanCardComments(projectDir, cardId);
+  // The card's history, derived by the server from every board write: read the
+  // same way, paged backwards, and rendered in the same list as the notes.
+  const activity = useKanbanCardActivity(projectDir, cardId);
+  // One story, one scroll: comments are the authored entries, activity the
+  // motions between them. Stable sort on the timestamps the server stamped.
+  const timeline = useMemo<TimelineItem[]>(() => {
+    const items: TimelineItem[] = [
+      ...activity.activity.map((event) => ({ key: `a:${event.id}`, at: event.createdAt, kind: "activity" as const, event })),
+      ...comments.comments.map((comment) => ({ key: `c:${comment.id}`, at: comment.createdAt, kind: "comment" as const, comment })),
+    ];
+    return items.sort((left, right) => left.at - right.at);
+  }, [activity.activity, comments.comments]);
+  const journalCount = comments.total + activity.total;
 
   const sessionOptions = useMemo(
     () => kanbanSessionOptions(sessions, runningSessionIds, card),
@@ -699,34 +877,64 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
           )}
         </div>
 
-        {/* Journal: what the next session needs, written down. */}
+        {/* Journal: the card's motions and the notes left across handoffs, one list. */}
         <div style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={SECTION_LABEL}>{t("kanban.detailComments")}</span>
-            {comments.total > 0 && (
-              <span style={{ fontSize: 10, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{comments.total}</span>
+            <span style={SECTION_LABEL}>{t("kanban.detailActivity")}</span>
+            {journalCount > 0 && (
+              <span style={{ fontSize: 10, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{journalCount}</span>
             )}
           </div>
           {draft ? (
             <p style={{ margin: "8px 0 0", fontSize: 11.5, lineHeight: 1.5, color: "var(--text-dim)" }}>{t("kanban.detailCommentsDraft")}</p>
           ) : (
             <>
-              {comments.status === "error" && (
-                <p style={{ margin: "8px 0 0", fontSize: 11.5, lineHeight: 1.5, color: "#e5484d" }}>{comments.error}</p>
+              {(comments.status === "error" || activity.status === "error") && (
+                <p style={{ margin: "8px 0 0", fontSize: 11.5, lineHeight: 1.5, color: "#e5484d" }}>
+                  {comments.error ?? activity.error ?? t("kanban.activityUnavailable")}
+                </p>
               )}
-              {comments.comments.length === 0 ? (
-                comments.status === "loading" ? null : (
-                  <p style={{ margin: "8px 0 0", fontSize: 11.5, lineHeight: 1.5, color: "var(--text-dim)" }}>{t("kanban.detailCommentsEmpty")}</p>
+              {timeline.length === 0 ? (
+                comments.status === "loading" || activity.status === "loading" ? null : (
+                  <p style={{ margin: "8px 0 0", fontSize: 11.5, lineHeight: 1.5, color: "var(--text-dim)" }}>{t("kanban.activityEmpty")}</p>
                 )
               ) : (
-                <ul style={{ margin: "8px 0 0", padding: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-                  {comments.comments.map((comment) => (
-                    <CommentEntry
-                      key={comment.id}
-                      comment={comment}
-                      onDelete={(commentId) => card && kanbanDeleteCardComment(projectDir, card.id, commentId)}
-                    />
-                  ))}
+                <ul
+                  data-kanban-activity={cardId ?? undefined}
+                  style={{ margin: "8px 0 0", padding: 0, position: "relative", display: "flex", flexDirection: "column", gap: 6 }}
+                >
+                  {/* The rail the derived rows hang their glyphs on. */}
+                  <span
+                    aria-hidden="true"
+                    style={{ position: "absolute", left: 7, top: 6, bottom: 6, width: 1, background: "var(--border)" }}
+                  />
+                  {activity.hasMore && (
+                    <li style={{ listStyle: "none", paddingLeft: 24 }}>
+                      <button
+                        type="button"
+                        onClick={activity.loadOlder}
+                        disabled={activity.loadingOlder}
+                        style={{ ...SEGMENT_BASE, padding: "1px 0", fontSize: 10.5, color: "var(--text-dim)" }}
+                      >
+                        {activity.loadingOlder ? t("kanban.activityLoadingOlder") : t("kanban.activityLoadOlder")}
+                      </button>
+                    </li>
+                  )}
+                  {timeline.map((item, index) =>
+                    item.kind === "comment" ? (
+                      <CommentEntry
+                        key={item.key}
+                        comment={item.comment}
+                        onDelete={(commentId) => card && kanbanDeleteCardComment(projectDir, card.id, commentId)}
+                      />
+                    ) : (
+                      <ActivityRow
+                        key={item.key}
+                        event={item.event}
+                        showTime={shouldShowActivityTime(timeline, index)}
+                      />
+                    ),
+                  )}
                 </ul>
               )}
               <div style={{ marginTop: 8, ...FIELD, padding: 0, overflow: "hidden" }}>

@@ -40,3 +40,10 @@ export const KANBAN_COMMENT_BUDGET = 800;
 
 /** `GET /api/kanban/comments` answers the newest rows, up to this many. */
 export const KANBAN_COMMENT_PAGE_LIMIT = 100;
+
+/**
+ * `read { cardId }` sends at most this many activity rows: enough to see what
+ * just happened to the card, cheap enough to ride on every one-card read
+ * (~20 tokens a row). Older history is the detail tab's, not a run's.
+ */
+export const KANBAN_ACTIVITY_READ_LIMIT = 5;
