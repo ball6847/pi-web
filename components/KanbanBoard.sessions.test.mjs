@@ -7,6 +7,7 @@ import { createJiti } from "jiti";
 import * as hooks from "../hooks/__fixtures__/react-hook-shim.mjs";
 import { kanbanSessionOptions } from "../lib/kanban-sessions.ts";
 const { cardsOfLane, canRestInLane } = await createJiti(import.meta.url).import("../lib/kanban-shared.ts");
+const { kanbanCardKey } = await createJiti(import.meta.url).import("../lib/kanban-types.ts");
 // The board's text search came with the search feature; the card and the view
 // both read it, so the harness runs the real module (a stub would hide a
 // broken highlight or filter).
@@ -40,7 +41,7 @@ function setup() {
     React: { createElement: (type, props, ...children) => ({ type, props: { ...props, children } }) },
     useI18n: () => ({ t: (key) => key }),
     useIsMobile: () => false,
-    kanbanSessionOptions, cardsOfLane, canRestInLane,
+    kanbanSessionOptions, cardsOfLane, canRestInLane, kanbanCardKey,
     kanbanDescriptionExcerpt, normalizeKanbanQuery, searchKanbanBoard,
     window: { addEventListener: noop, removeEventListener: noop },
     document: { addEventListener: noop, removeEventListener: noop },

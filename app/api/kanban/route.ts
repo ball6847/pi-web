@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { KANBAN_COMMENT_MAX, KANBAN_LANE_INSTRUCTIONS_MAX } from "@/lib/kanban-tool-limits";
-import type { KanbanBoardResponse, KanbanRequest } from "@/lib/kanban-types";
+import { KANBAN_PREFIX_MAX, type KanbanBoardResponse, type KanbanRequest } from "@/lib/kanban-types";
 import {
   applyMutation,
   getBoardRevision,
@@ -32,6 +32,7 @@ import { hasJsonContentType, isApiRequestAllowed } from "@/lib/request-security"
 //      edit-lane { laneId, description?, instructions? }
 //      move-lane { laneId, direction: -1|1 }           reorder-lane { laneId, toIndex }
 //      delete-lane { laneId }
+//      set-card-prefix { prefix }        (the board's card key: `PIW-42`)
 //
 // Every answer that is not a board is a typed refusal `{ error, code }`, never
 // a stack: 400 invalid (the request, the folder, a rule of the board), 403 for
@@ -171,6 +172,8 @@ function readAction(body: Record<string, unknown>): KanbanRequest {
     }
     case "delete-lane":
       return { action: "delete-lane", laneId: required(body, "laneId", MAX_ID) };
+    case "set-card-prefix":
+      return { action: "set-card-prefix", prefix: required(body, "prefix", KANBAN_PREFIX_MAX) };
     // A card's comments are written through this one route too (one lock, one
     // queue, one revision), but they live in their own table and their own read.
     case "add-comment":

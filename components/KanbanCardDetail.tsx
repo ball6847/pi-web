@@ -30,7 +30,8 @@ import {
 } from "@/lib/kanban";
 import { canRestInLane } from "@/lib/kanban-shared";
 import { kanbanSessionOptions } from "@/lib/kanban-sessions";
-import type { KanbanActivity, KanbanActivityKind, KanbanCard } from "@/lib/kanban-types";
+import { kanbanCardKey, type KanbanActivity, type KanbanActivityKind, type KanbanCard } from "@/lib/kanban-types";
+import { copyText } from "@/lib/clipboard";
 import type { SessionInfo } from "@/lib/types";
 import type { KanbanComment } from "@/lib/kanban-types";
 
@@ -569,6 +570,25 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
             </select>
             <CaretIcon />
           </label>
+          {!draft && card && board && (
+            <button
+              type="button"
+              data-kanban-detail-key={kanbanCardKey(board, card)}
+              onClick={() => void copyText(kanbanCardKey(board, card))}
+              title={t("kanban.cardKeyTitle", { key: kanbanCardKey(board, card) })}
+              aria-label={t("kanban.menuCopyKey", { key: kanbanCardKey(board, card) })}
+              style={{
+                ...CHIP,
+                cursor: "pointer",
+                fontFamily: "var(--font-mono)",
+                fontSize: 10.5,
+                letterSpacing: 0.3,
+                color: "var(--text-muted)",
+              }}
+            >
+              {kanbanCardKey(board, card)}
+            </button>
+          )}
           <span style={{ flex: 1 }} />
           {!draft && card && (
             <button

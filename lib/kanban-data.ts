@@ -5,6 +5,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   KANBAN_ACTIVITY_KEEP,
   KANBAN_SCHEMA_VERSION,
+  defaultCardPrefix,
   defaultLanes,
   type KanbanActivity,
   type KanbanBoard,
@@ -57,6 +58,7 @@ CREATE TABLE cards (
   id            TEXT PRIMARY KEY,
   position      INTEGER NOT NULL,
   lane_id       TEXT NOT NULL REFERENCES lanes(id),
+  number        INTEGER NOT NULL DEFAULT 0,
   title         TEXT NOT NULL,
   description   TEXT NOT NULL,
   session_id    TEXT,
@@ -81,6 +83,9 @@ CREATE TABLE card_comments (
 
 -- One card per session, the board's own rule, now enforced by the file too.
 CREATE UNIQUE INDEX cards_session ON cards(session_id) WHERE session_id IS NOT NULL;
+-- A card number is unique per board and monotonic; 0 is the repair bucket a
+-- hand-edited row carries until the reader numbers it.
+CREATE UNIQUE INDEX cards_number ON cards(number) WHERE number > 0;
 CREATE INDEX cards_lane ON cards(lane_id, position);
 CREATE INDEX cards_updated ON cards(updated_at);
 CREATE INDEX card_comments_card ON card_comments(card_id, created_at);
@@ -253,6 +258,22 @@ const MIGRATIONS: Record<number, string[]> = {
     ) STRICT`,
     "CREATE INDEX card_activity_card ON card_activity(card_id)",
   ],
+  // v4 -> v5: card keys (`PIWEB-42`). Existing cards are numbered in creation
+  // order, and the counter starts after the highest — so the unique index can
+  // be built, and a card deleted later never hands its number to a new one.
+  // One version belongs to one step: v3 -> v4 is the activity trail's, so the
+  // numbers ride on the step after it and a v4 board gains the column here.
+  4: [
+    "ALTER TABLE cards ADD COLUMN number INTEGER NOT NULL DEFAULT 0",
+    `UPDATE cards SET number = (
+      SELECT rn FROM (SELECT id AS cid, ROW_NUMBER() OVER (ORDER BY created_at, id) AS rn FROM cards)
+      WHERE cid = cards.id
+    )`,
+    "CREATE UNIQUE INDEX cards_number ON cards(number) WHERE number > 0",
+    `INSERT INTO meta (key, value)
+     VALUES ('next_card_number', (SELECT COALESCE(MAX(number), 0) + 1 FROM cards))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  ],
 };
 
 /**
@@ -260,18 +281,23 @@ const MIGRATIONS: Record<number, string[]> = {
  * from its stamp up, each inside the caller's transaction (the store calls
  * this under its file lock; `BEGIN IMMEDIATE` re-checked makes two concurrent
  * openers safe — the second one finds the stamp already current and no-ops).
- * A failure rolls back, leaving the file at its old version. No revision bump:
- * the data is unchanged, only its storage.
+ * A failure rolls back, leaving the file at its old version. No revision bump —
+ * the data is unchanged, only its storage — except into v5, which gives every
+ * card a number the views now show: a client holding a cached board must
+ * refetch for its card keys, and a moved revision is how it is told.
  */
 export function migrateKanbanDatabase(db: DatabaseSync): void {
   if (readSchemaVersion(db) === KANBAN_SCHEMA_VERSION) return;
+  const startedAt = readSchemaVersion(db);
   inTransaction(db, () => {
-    let from = readSchemaVersion(db);
+    let from = startedAt;
     while (from < KANBAN_SCHEMA_VERSION) {
       for (const statement of MIGRATIONS[from] ?? []) db.exec(statement);
       from += 1;
       db.exec(`PRAGMA user_version = ${from}`);
     }
+    // The numbers step is the only one at v4: crossing into 5 ran it.
+    if (startedAt < 5 && from >= 5) bumpRevision(db);
   });
 }
 
@@ -351,6 +377,7 @@ interface CardRow {
   id: string;
   position: number;
   lane_id: string;
+  number: number;
   title: string;
   description: string;
   session_id: string | null;
@@ -424,6 +451,7 @@ function toLane(row: LaneRow): KanbanLane {
 function toCard(row: CardRow): KanbanCard {
   return {
     id: row.id,
+    number: Number(row.number) || 0,
     title: row.title,
     description: row.description,
     laneId: row.lane_id,
@@ -437,6 +465,12 @@ function toCard(row: CardRow): KanbanCard {
 export interface KanbanSnapshot {
   board: KanbanBoard;
   revision: number;
+  /**
+   * Whether the file holds a `card_prefix` row. A board that never stored one
+   * (a v3 file migrated in place, or a hand-rolled file) renders the folder's
+   * derived prefix; the store picks a collision-free one before persisting it.
+   */
+  storedCardPrefix: boolean;
 }
 
 /**
@@ -457,7 +491,7 @@ export function readBoardRows(db: DatabaseSync, projectDir: string): KanbanSnaps
     const lanes = laneRows.map(toLane);
     const backlog = lanes.find((lane) => lane.fixed) ?? lanes[0];
     const cardRows = db
-      .prepare("SELECT id, position, lane_id, title, description, session_id, session_title, created_at, updated_at FROM cards ORDER BY position")
+      .prepare("SELECT id, position, lane_id, number, title, description, session_id, session_title, created_at, updated_at FROM cards ORDER BY position")
       .all() as unknown as CardRow[];
     const laneIds = new Set(lanes.map((lane) => lane.id));
     const sessions = new Set<string>();
@@ -475,8 +509,43 @@ export function readBoardRows(db: DatabaseSync, projectDir: string): KanbanSnaps
       }
       cards.push(card);
     }
-    return { board: { projectDir, lanes, cards }, revision: readBoardRevision(db) };
+    const meta = readBoardMeta(db);
+    // A hand-edited row without a number gets one after the board's highest, in
+    // row order: the key a view renders must always be readable, and the repair
+    // itself lands with the next write.
+    let nextCardNumber = Math.max(meta.nextCardNumber, highestCardNumber(cards) + 1);
+    const seen = new Set<number>();
+    for (const card of cards) {
+      if (card.number > 0 && !seen.has(card.number)) {
+        seen.add(card.number);
+        continue;
+      }
+      // Unnumbered (a hand-edited row) or a duplicate: numbered after the rest.
+      card.number = nextCardNumber;
+      seen.add(card.number);
+      nextCardNumber += 1;
+    }
+    const cardPrefixAliases = meta.prefixAliases.length ? { cardPrefixAliases: meta.prefixAliases } : {};
+    return {
+      board: {
+        projectDir,
+        lanes,
+        cards,
+        cardPrefix: meta.cardPrefix ?? defaultCardPrefix(projectDir),
+        nextCardNumber,
+        ...cardPrefixAliases,
+      },
+      revision: readBoardRevision(db),
+      storedCardPrefix: meta.cardPrefix !== null,
+    };
   });
+}
+
+/** The highest number any card carries (0 for a board with no numbered card). */
+function highestCardNumber(cards: readonly KanbanCard[]): number {
+  let highest = 0;
+  for (const card of cards) if (card.number > highest) highest = card.number;
+  return highest;
 }
 
 /**
@@ -496,13 +565,15 @@ export function writeBoardRows(db: DatabaseSync, board: KanbanBoard): number {
     lane.run(entry.id, position, entry.name, entry.description, entry.instructions ?? "", entry.fixed ? 1 : 0);
   }
   const card = db.prepare(
-    "INSERT INTO cards (id, position, lane_id, title, description, session_id, session_title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO cards (id, position, lane_id, number, title, description, session_id, session_title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   );
   for (const [position, entry] of board.cards.entries()) {
-    card.run(entry.id, position, entry.laneId, entry.title, entry.description, entry.sessionId, entry.sessionTitle, entry.createdAt, entry.updatedAt);
+    card.run(entry.id, position, entry.laneId, entry.number, entry.title, entry.description, entry.sessionId, entry.sessionTitle, entry.createdAt, entry.updatedAt);
   }
+  writeBoardMeta(db, board);
   // A card that is gone takes its thread and its history: the one cleanup
   // rule, applied where the board is written (neither is a row of `cards`).
+
   db.exec("DELETE FROM card_comments WHERE card_id NOT IN (SELECT id FROM cards)");
   db.exec("DELETE FROM card_activity WHERE card_id NOT IN (SELECT id FROM cards)");
   return bumpRevision(db);
@@ -513,6 +584,60 @@ export function bumpRevision(db: DatabaseSync): number {
   const revision = readBoardRevision(db) + 1;
   db.prepare("INSERT INTO meta (key, value) VALUES ('revision', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(revision));
   return revision;
+}
+
+// ---------------------------------------------------------------------------
+// Card-key metadata (`PIW-42`)
+// ---------------------------------------------------------------------------
+
+const META_CARD_PREFIX = "card_prefix";
+const META_CARD_PREFIX_ALIASES = "card_prefix_aliases";
+const META_NEXT_CARD_NUMBER = "next_card_number";
+
+/** The board's card-key state, as the `meta` rows hold it (absent before the first write). */
+export interface KanbanCardKeyMeta {
+  /** Null when the board never stored one: the reader falls back to the folder's name. */
+  cardPrefix: string | null;
+  /** Prefixes a rename left behind, newest first, so old references still resolve. */
+  prefixAliases: string[];
+  /** 0 when the board never stored one: the reader derives it from the cards. */
+  nextCardNumber: number;
+}
+
+function readMetaValue(db: DatabaseSync, key: string): string | null {
+  const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value?: string } | undefined;
+  return typeof row?.value === "string" ? row.value : null;
+}
+
+/** Alias rows are a JSON array of prefixes; anything else reads as none. */
+function parseAliases(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((value): value is string => typeof value === "string" && value.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+/** The board's card-key meta rows. Never creates anything: a missing row reads as its default. */
+export function readBoardMeta(db: DatabaseSync): KanbanCardKeyMeta {
+  const nextCardNumber = Number(readMetaValue(db, META_NEXT_CARD_NUMBER) ?? 0);
+  return {
+    cardPrefix: readMetaValue(db, META_CARD_PREFIX) || null,
+    prefixAliases: parseAliases(readMetaValue(db, META_CARD_PREFIX_ALIASES)),
+    nextCardNumber: Number.isFinite(nextCardNumber) ? Math.max(0, Math.trunc(nextCardNumber)) : 0,
+  };
+}
+
+function writeBoardMeta(db: DatabaseSync, board: KanbanBoard): void {
+  const write = db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+  write.run(META_CARD_PREFIX, board.cardPrefix);
+  write.run(META_NEXT_CARD_NUMBER, String(Math.max(1, board.nextCardNumber)));
+  const aliases = board.cardPrefixAliases ?? [];
+  if (aliases.length > 0) write.run(META_CARD_PREFIX_ALIASES, JSON.stringify(aliases));
+  else db.prepare("DELETE FROM meta WHERE key = ?").run(META_CARD_PREFIX_ALIASES);
 }
 
 // ---------------------------------------------------------------------------
@@ -632,7 +757,7 @@ export function initializeBoard(db: DatabaseSync, board: KanbanBoard, activity: 
   });
 }
 
-/** A board that has never been written: the six default lanes, no cards. */
+/** A board that has never been written: the six default lanes, no cards, and the folder's own prefix. */
 export function freshBoard(projectDir: string): KanbanBoard {
-  return { projectDir, lanes: defaultLanes(), cards: [] };
+  return { projectDir, lanes: defaultLanes(), cards: [], cardPrefix: defaultCardPrefix(projectDir), nextCardNumber: 1 };
 }
