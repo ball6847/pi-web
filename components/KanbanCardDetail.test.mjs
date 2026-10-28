@@ -54,9 +54,10 @@ function setup() {
     // The activity journal (another feature's route): an empty, ready page.
     useKanbanCardActivity: () => ({ activity: [], total: 0, status: "ready", hasMore: false, loadingOlder: false, loadOlder: noop }),
     kanbanCardKey,
-    copyText: noop,
     canRestInLane,
     kanbanSessionOptions,
+    // The card's key chip (its own file: one click copies the reference).
+    KanbanCardKeyChip: "KanbanCardKeyChip",
     MarkdownBody: "MarkdownBody",
     SpinnerIcon: "SpinnerIcon",
     CardMenu: "CardMenu",

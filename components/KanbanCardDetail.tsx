@@ -16,6 +16,7 @@ import { useI18n } from "@/hooks/useI18n";
 import { MarkdownBody } from "./MarkdownBody";
 import { SpinnerIcon } from "./SidebarIcons";
 import { CardMenu, type MenuEntry } from "./KanbanBoard";
+import { KanbanCardKeyChip } from "./KanbanCardKeyChip";
 import {
   kanbanAddCard,
   kanbanAddCardComment,
@@ -32,7 +33,6 @@ import {
 import { canRestInLane } from "@/lib/kanban-shared";
 import { kanbanSessionOptions } from "@/lib/kanban-sessions";
 import { kanbanCardKey, type KanbanActivity, type KanbanActivityKind, type KanbanCard } from "@/lib/kanban-types";
-import { copyText } from "@/lib/clipboard";
 import type { SessionInfo } from "@/lib/types";
 import type { KanbanComment } from "@/lib/kanban-types";
 
@@ -636,23 +636,7 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
             <CaretIcon />
           </button>
           {!draft && card && board && (
-            <button
-              type="button"
-              data-kanban-detail-key={kanbanCardKey(board, card)}
-              onClick={() => void copyText(kanbanCardKey(board, card))}
-              title={t("kanban.cardKeyTitle", { key: kanbanCardKey(board, card) })}
-              aria-label={t("kanban.menuCopyKey", { key: kanbanCardKey(board, card) })}
-              style={{
-                ...CHIP,
-                cursor: "pointer",
-                fontFamily: "var(--font-mono)",
-                fontSize: 10.5,
-                letterSpacing: 0.3,
-                color: "var(--text-muted)",
-              }}
-            >
-              {kanbanCardKey(board, card)}
-            </button>
+            <KanbanCardKeyChip cardKey={kanbanCardKey(board, card)} variant="detail" />
           )}
           <span style={{ flex: 1 }} />
           {!draft && card && (

@@ -35,6 +35,7 @@ import { copyText } from "@/lib/clipboard";
 import { cardsOfLane, canRestInLane } from "@/lib/kanban-shared";
 import { kanbanDescriptionExcerpt, normalizeKanbanQuery, searchKanbanBoard } from "@/lib/kanban-search";
 import { KanbanSearchField, KanbanSearchStyles, KanbanSearchText } from "./KanbanSearch";
+import { KanbanCardKeyChip } from "./KanbanCardKeyChip";
 import { kanbanSessionOptions, type KanbanSessionOption as SessionOption } from "@/lib/kanban-sessions";
 import { KANBAN_LANE_INSTRUCTIONS_MAX } from "@/lib/kanban-tool-limits";
 import {
@@ -709,20 +710,11 @@ export function CardView({
         <div style={{ flex: 1, minWidth: 0 }}>
           {cardKey && (
             <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
-              <span
-                data-kanban-card-key={cardKey}
-                title={t("kanban.cardKeyTitle", { key: cardKey })}
-                style={{
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 9.5,
-                  fontWeight: 500,
-                  letterSpacing: 0.2,
-                  color: "var(--text-dim)",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                <KanbanSearchText text={cardKey} query={query} />
-              </span>
+              {/* The key above the title double as the copy button: the
+                  reference a commit message or a prompt carries, one click
+                  away, and never a card open (the chip stops both the click
+                  and the drag's pointerdown). */}
+              <KanbanCardKeyChip cardKey={cardKey} query={query} />
             </div>
           )}
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
