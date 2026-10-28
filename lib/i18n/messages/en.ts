@@ -1537,6 +1537,8 @@ export const enLocale: LocalePlugin = {
     "kanban.detailStartSession": "Start session",
     "kanban.detailUnlink": "Unlink",
     "kanban.detailBacklogHint": "The backlog never takes a session",
+    "kanban.detailBacklogStartHint": "The backlog takes no session — starting one moves this card to {lane}",
+    "kanban.detailStartMovesTo": "→ {lane}",
     "kanban.detailTitlePlaceholder": "Card title",
     "kanban.detailDescription": "Description",
     "kanban.detailDescriptionPlaceholder": "What this card needs — Markdown, Ctrl+Enter saves",
