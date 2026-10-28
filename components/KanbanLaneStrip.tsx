@@ -11,6 +11,7 @@ import { useI18n } from "@/hooks/useI18n";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import type { KanbanBoard as KanbanBoardData, KanbanCard, KanbanLane, KanbanNewSessionPending } from "@/lib/kanban-types";
 import { laneIndex, sessionlessCardsByRecency } from "@/lib/kanban-shared";
+import { kanbanCardKey } from "@/lib/kanban-types";
 import { CardMenu, type MenuEntry } from "./KanbanBoard";
 
 export interface KanbanLaneStripProps {
@@ -72,7 +73,7 @@ export function KanbanLaneStrip({
   const nextLane = card ? board.lanes[cardIndex + 1] ?? null : null;
 
   const statusLabel = card
-    ? card.title
+    ? `${kanbanCardKey(board, card)} · ${card.title}`
     : pending?.kind === "attach"
       ? `${t("kanban.stripPending")} — ${t("kanban.stripPendingCard", { title: pending.cardTitle })}`
       : showPending

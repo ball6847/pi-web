@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import lockfile from "proper-lockfile";
@@ -18,6 +18,7 @@ import {
   kanbanBoardPath,
   migrateKanbanDatabase,
   openKanbanDatabase,
+  readBoardMeta,
   readBoardRevision,
   readBoardRows,
   readCardActivity,
@@ -25,7 +26,15 @@ import {
   writeBoardRows,
   type KanbanSnapshot,
 } from "./kanban-data";
-import { applyKanbanAction, attachSessionCard, pruneDeadLinks, type KanbanSessionCardPick } from "./kanban-shared";
+import {
+  applyKanbanAction,
+  attachSessionCard,
+  pruneDeadLinks,
+  resolveKanbanActionRefs,
+  resolveKanbanCardRef,
+  setCardPrefix,
+  type KanbanSessionCardPick,
+} from "./kanban-shared";
 import {
   applyKanbanToolMutation, kanbanToolCommentResult, kanbanToolMutationResult, kanbanToolOverview, kanbanToolRead, kanbanToolSearch,
   parseKanbanToolRequest, resolveKanbanToolCard,
@@ -35,8 +44,12 @@ import { KANBAN_COMMENT_PAGE_LIMIT } from "./kanban-tool-limits";
 import {
   KANBAN_ACTIVITY_PAGE_LIMIT,
   KANBAN_JSON_SCHEMA_VERSION,
+  KANBAN_PREFIX_MAX,
+  KANBAN_PREFIX_MIN,
   KANBAN_SCHEMA_VERSION,
+  defaultCardPrefix,
   makeKanbanId,
+  normalizeKanbanPrefix,
   type KanbanAction,
   type KanbanActivity,
   type KanbanBoard,
@@ -383,8 +396,10 @@ function parseJsonBoard(text: string, projectDir: string): KanbanBoard | null {
   for (const value of raw.board.cards) {
     if (!isRecord(value) || typeof value.id !== "string" || !value.id || typeof value.title !== "string" || typeof value.laneId !== "string") continue;
     if (cards.some((card) => card.id === value.id)) continue;
+    // The old storage had no numbers: a card's creation order is its number.
     const card: KanbanCard = {
       id: value.id,
+      number: cards.length + 1,
       title: value.title,
       description: typeof value.description === "string" ? value.description : "",
       laneId: value.laneId,
@@ -403,7 +418,7 @@ function parseJsonBoard(text: string, projectDir: string): KanbanBoard | null {
     }
     cards.push(card);
   }
-  return { projectDir, lanes, cards };
+  return { projectDir, lanes, cards, cardPrefix: defaultCardPrefix(projectDir), nextCardNumber: cards.length + 1 };
 }
 
 type KanbanLaneRow = KanbanBoard["lanes"][number];
@@ -563,6 +578,62 @@ function backUpUnusableBoard(path: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Card-key prefixes (`PIW-42`)
+// ---------------------------------------------------------------------------
+
+/**
+ * The prefixes the other boards on this machine have stored. Card keys are one
+ * namespace the user reads (and types into commit messages), so two projects
+ * sharing `PIW` would make every reference ambiguous. Only stored prefixes
+ * count: a board that never wrote one has no cards yet, and picks a free one
+ * before its first write.
+ */
+function takenCardPrefixes(selfPath: string): Set<string> {
+  const taken = new Set<string>();
+  const dir = dirname(selfPath);
+  const root = dirname(dir);
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return taken;
+  }
+  for (const entry of entries) {
+    const path = join(root, entry, "kanban.sqlite");
+    if (entry === "" || path === selfPath || !existsSync(path)) continue;
+    let db: DatabaseSync | undefined;
+    try {
+      db = openKanbanDatabase(path, { timeout: 2_000 });
+      const prefix = readBoardMeta(db).cardPrefix;
+      if (prefix) taken.add(prefix.toUpperCase());
+    } catch {
+      // Another build's schema, or a board being written right now: not a name
+      // this call can reserve. The other side's own save check still runs.
+    } finally {
+      if (db) closeKanbanDatabase(db);
+    }
+  }
+  return taken;
+}
+
+/** `prefix`, or its first free variant (`PIWEB2`, `PIWEB3`…): a derived default must never collide. */
+function uniqueCardPrefix(path: string, wanted: string): string {
+  const taken = takenCardPrefixes(path);
+  if (!taken.has(wanted.toUpperCase())) return wanted;
+  for (let suffix = 2; suffix < 100; suffix += 1) {
+    const tail = String(suffix);
+    const candidate = `${wanted.slice(0, Math.max(1, KANBAN_PREFIX_MAX - tail.length))}${tail}`;
+    if (!taken.has(candidate.toUpperCase())) return candidate;
+  }
+  return wanted;
+}
+
+/** `board` with its prefix set; the SAME board when it already is. */
+function withCardPrefix(board: KanbanBoard, prefix: string): KanbanBoard {
+  return prefix === board.cardPrefix ? board : { ...board, cardPrefix: prefix };
+}
+
+// ---------------------------------------------------------------------------
 // Locked read-modify-write
 // ---------------------------------------------------------------------------
 
@@ -609,6 +680,10 @@ async function editBoard(
         if (opened.kind === "newer") throw new KanbanSchemaError(unsupportedSchemaMessage(opened.version));
         const seed = opened.kind === "ready" ? null : await seedBoard(projectRoot);
         const board = opened.kind === "ready" ? opened.snapshot.board : seed!.board;
+        // A board that never stored a prefix (a v3 file migrated in place, a
+        // fresh board, an imported JSON board) picks a free one here — the one
+        // write that can tell, because it holds the file lock.
+        const needsPrefix = opened.kind !== "ready" || !opened.snapshot.storedCardPrefix;
         checkKanbanSignal(options.signal);
         const at = Date.now();
         const result = await edit(board, at);
@@ -616,24 +691,30 @@ async function editBoard(
         // Agent refusals must not initialize, migrate or repair a board. The
         // browser's existing materializing-refusal behavior remains the default.
         if ("ok" in result && options.materializeRefused === false) return result;
-        const next = "board" in result ? result.board : board;
+        let next = "board" in result ? result.board : board;
         const commentWrites = "board" in result ? result.comments ?? [] : [];
+        if (needsPrefix) next = withCardPrefix(next, uniqueCardPrefix(path, next.cardPrefix));
+        // Persisting the prefix alone still writes: the derived default must be
+        // reserved before another project derives it too.
+        const prefixWrite = needsPrefix && next === board;
         const activity = next === board ? [] : deriveKanbanActivity(board, next, at, options.activityActor);
         let db: DatabaseSync;
         if (opened.kind === "ready") {
           db = opened.db;
-          if (next !== board || commentWrites.length > 0) {
+          if (next !== board || commentWrites.length > 0 || prefixWrite) {
             inTransaction(db, () => {
               // One revision bump covers all of it: a comment is as much a change
               // the other clients must see as a card move is, and an activity row
-              // only ever rides on a board write.
-              if (next !== board) writeBoardRows(db, next);
+              // only ever rides on a board write (the card-key prefix is a write
+              // of its own: a new board must reserve its prefix even when the
+              // board itself did not change).
+              if (next !== board || prefixWrite) writeBoardRows(db, next);
               for (const write of commentWrites) {
                 if (write.kind === "add") insertCardComment(db, write.comment);
                 else deleteCardComment(db, write.commentId);
               }
               insertCardActivity(db, activity);
-              if (next === board) bumpRevision(db);
+              if (next === board && !prefixWrite) bumpRevision(db);
             });
           }
         } else {
@@ -741,13 +822,14 @@ export async function executeKanbanToolRequest(
       if (request.cardId === undefined) return kanbanToolOverview(snapshot.board, snapshot.revision, actor.sessionId);
       // One card's thread is read through its own (bounded) query: a card read
       // never pulls the whole board's comments, and the overview pulls none.
-      const thread = await readCardCommentsFor(valid.cwd, request.cardId);
+      const cardId = resolveKanbanCardRef(snapshot.board, request.cardId)?.id ?? request.cardId;
+      const thread = await readCardCommentsFor(valid.cwd, cardId);
       const comments = thread.ok ? { comments: thread.comments, total: thread.total } : { comments: [], total: 0 };
       // A card's history, bounded the same way: the newest few rows ride on the
       // one-card read so a fresh session can see what its predecessor did.
-      const trail = await readCardActivityFor(valid.cwd, request.cardId);
+      const trail = await readCardActivityFor(valid.cwd, cardId);
       const activity = trail.ok ? { activity: trail.activity, total: trail.total } : { activity: [], total: 0 };
-      return kanbanToolRead(snapshot.board, snapshot.revision, actor.sessionId, request.cardId, comments, activity);
+      return kanbanToolRead(snapshot.board, snapshot.revision, actor.sessionId, cardId, comments, activity);
     }
     let cardId = "";
     let written: KanbanComment | null = null;
@@ -893,12 +975,13 @@ export async function readCardActivityFor(
 /** A person's note on a card: the browser's half of the thread. */
 async function addCommentMutation(projectRoot: string, action: { cardId: string; body: string }): Promise<KanbanBoardResult> {
   return editBoard(projectRoot, async (board, now) => {
-    if (!board.cards.some((card) => card.id === action.cardId)) {
+    const card = resolveKanbanCardRef(board, action.cardId);
+    if (!card) {
       return failure("refused", "That card is no longer on the board");
     }
     const comment: KanbanComment = {
       id: makeKanbanId(),
-      cardId: action.cardId,
+      cardId: card.id,
       author: "user",
       sessionId: null,
       sessionTitle: null,
@@ -912,6 +995,26 @@ async function addCommentMutation(projectRoot: string, action: { cardId: string;
 /** Removing a note. An id that is already gone is not a failure: two tabs race. */
 async function deleteCommentMutation(projectRoot: string, action: { commentId: string }): Promise<KanbanBoardResult> {
   return editBoard(projectRoot, async (board) => ({ board, comments: [{ kind: "delete", commentId: action.commentId }] }));
+}
+
+/**
+ * The board's card-key prefix: one per project, unique among the boards of
+ * this machine, and the prefix a rename replaces is kept as an alias so
+ * references written before it still resolve.
+ */
+async function setCardPrefixMutation(projectRoot: string, prefix: string): Promise<KanbanBoardResult> {
+  const wanted = normalizeKanbanPrefix(prefix);
+  if (!wanted) {
+    return failure("refused", `A card prefix is ${KANBAN_PREFIX_MIN}–${KANBAN_PREFIX_MAX} characters: a letter first, then letters or digits.`);
+  }
+  const path = kanbanBoardPath(projectRoot);
+  return editBoard(projectRoot, async (board) => {
+    if (takenCardPrefixes(path).has(wanted)) {
+      return failure("refused", `The prefix "${wanted}" already belongs to another project's board on this machine. Pick a different one.`);
+    }
+    const next = setCardPrefix(board, wanted);
+    return next ? { board: next } : failure("refused", `"${wanted}" is not a usable card prefix.`);
+  });
 }
 
 /**
@@ -929,12 +1032,14 @@ export async function applyMutation(cwd: string, action: KanbanRequest): Promise
   try {
     if (action.action === "add-comment") return await addCommentMutation(projectRoot, action);
     if (action.action === "delete-comment") return await deleteCommentMutation(projectRoot, action);
+    if (action.action === "set-card-prefix") return await setCardPrefixMutation(projectRoot, action.prefix);
     const sessionId = actionSessionId(action);
     if (sessionId !== null && !(await validateSession(projectRoot, sessionId))) {
       return failure("session-missing", "That session does not exist in this project");
     }
     return await editBoard(projectRoot, async (board, now) => {
-      const next = applyKanbanAction(board, action, now);
+      // A card may be named by its key (`PIW-42`) wherever an id is taken.
+      const next = applyKanbanAction(board, resolveKanbanActionRefs(board, action), now);
       return next ? { board: await pruneBoard(next, now) } : failure("refused", `The board's rules refuse "${action.action}" here`);
     });
   } catch (error) {

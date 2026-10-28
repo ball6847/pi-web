@@ -1,4 +1,4 @@
-import { cardForSession, moveCardToLane } from "./kanban-shared";
+import { cardForSession, moveCardToLane, nextCardNumber, resolveKanbanCardRef } from "./kanban-shared";
 import { cardMatchesQuery, kanbanDescriptionExcerpt } from "./kanban-search";
 import {
   KANBAN_ACTIVITY_READ_LIMIT,
@@ -10,7 +10,7 @@ import {
   KANBAN_SEARCH_MAX_LIMIT,
 } from "./kanban-tool-limits";
 import type { KanbanFailureCode } from "./kanban-store";
-import type { KanbanActivity, KanbanActivityKind, KanbanBoard, KanbanCard, KanbanComment, KanbanLane } from "./kanban-types";
+import { kanbanCardKey, type KanbanActivity, type KanbanActivityKind, type KanbanBoard, type KanbanCard, type KanbanComment, type KanbanLane } from "./kanban-types";
 
 /** Agent requests are deliberately separate from the browser's link-stealing actions. */
 export type KanbanToolRequest =
@@ -26,7 +26,8 @@ export type KanbanToolComment = Extract<KanbanToolRequest, { action: "comment" }
 export type KanbanToolActor = { sessionId: string; sessionTitle?: string | null };
 export type KanbanToolFailure = { ok: false; code: KanbanFailureCode | "invalid-request" | "read-only"; error: string };
 // Mapped data types also satisfy Pi's JsonValue contract (interfaces have no index signature).
-type CardData = { [K in keyof KanbanCard]: KanbanCard[K] };
+// A card the tool sends carries its `key` too: the handle people use (`PIW-42`).
+type CardData = { [K in keyof KanbanCard]: KanbanCard[K] } & { key: string };
 type LaneData = { [K in keyof KanbanLane]: KanbanLane[K] };
 /** One comment as a card read sends it: the head of a long note, never the whole thread. */
 type CommentData = { [K in keyof KanbanComment]: KanbanComment[K] };
@@ -44,11 +45,13 @@ export type KanbanActivityLineData = {
 /** A lane without its cards: enough to choose one, cheap enough to always send. */
 export type KanbanLaneOverviewData = { id: string; name: string; description: string; fixed?: boolean; cardCount: number };
 /** One search hit: no id-less body, just the field a model picks a card with. */
-export type KanbanCardSummaryData = { id: string; title: string; laneId: string; linked?: true; excerpt: string };
+export type KanbanCardSummaryData = { id: string; key: string; title: string; laneId: string; linked?: true; excerpt: string };
 export type KanbanToolResult = KanbanToolFailure | {
   ok: true;
   action: "read";
   projectDir: string;
+  /** The board's card-key prefix, so a model can speak `PIW-42` without reading a card first. */
+  cardPrefix: string;
   lanes: KanbanLaneOverviewData[];
   totalCards: number;
   currentCard: CardData | null;
@@ -154,25 +157,30 @@ function refused(error: string): KanbanToolFailure & { code: "refused" } {
   return { ok: false, code: "refused", error };
 }
 
-/**
- * The card a mutation acts on: an explicit id, or this session's own linked
+/** A card as every projection sends it: the row plus the key a person reads. */
+function cardData(board: KanbanBoard, card: KanbanCard): CardData {
+  return { ...card, key: kanbanCardKey(board, card) };
+}
+
+/** The card a mutation acts on: an explicit id, or this session's own linked
  * card. Refused for an unknown card, and for a card another session owns —
  * a link is never stolen, and a foreign card is never edited. An unlinked card
- * is fair game (text edits, a claim, a comment).
+ * is fair game (text edits, a claim, a comment). `cardId` may be the card's id,
+ * its key (`PIW-42`) or, within this board, its number.
  */
 export function resolveKanbanToolCard(
   board: KanbanBoard,
   cardId: string | undefined,
   actor: KanbanToolActor,
 ): { ok: true; card: KanbanCard } | (KanbanToolFailure & { code: "refused" }) {
-  const card = cardId === undefined ? cardForSession(board, actor.sessionId) : board.cards.find((c) => c.id === cardId);
+  const card = cardId === undefined ? cardForSession(board, actor.sessionId) : resolveKanbanCardRef(board, cardId);
   if (!card) {
     return refused(cardId === undefined
       ? "This session has no linked card. Read the board, then specify cardId and a work laneId to claim a free card."
-      : "Card not found in this project's board. Use kanban read to discover current card IDs.");
+      : "Card not found in this project's board. Use its key (like PIW-42), an id from kanban read, or search to discover current cards.");
   }
   if (card.sessionId !== null && card.sessionId !== actor.sessionId) {
-    return refused(`Card "${card.id}" belongs to another session. Choose an unlinked card; links cannot be stolen.`);
+    return refused(`Card "${kanbanCardKey(board, card)}" belongs to another session. Choose an unlinked card; links cannot be stolen.`);
   }
   return { ok: true, card };
 }
@@ -189,15 +197,16 @@ export function applyKanbanToolMutation(
   if (request.action === "create") {
     const lane = request.laneId === undefined ? board.lanes[0] : board.lanes.find((l) => l.id === request.laneId);
     if (!lane) return refused("Lane not found. Use kanban read to discover the current lane IDs.");
-    if (!lane.fixed && current) return refused(`This session already owns card "${current.id}". Update it, or create an independent task in Backlog.`);
+    if (!lane.fixed && current) return refused(`This session already owns card "${kanbanCardKey(board, current)}". Update it, or create an independent task in Backlog.`);
     if (board.cards.some((c) => c.id === newCardId)) return refused("The new card ID already exists. Read the board before trying again.");
+    const number = nextCardNumber(board);
     const card: KanbanCard = {
-      id: newCardId, title: request.title.trim(), description: (request.description ?? "").trim(), laneId: lane.id,
+      id: newCardId, number, title: request.title.trim(), description: (request.description ?? "").trim(), laneId: lane.id,
       sessionId: lane.fixed ? null : actor.sessionId,
       sessionTitle: lane.fixed ? null : actor.sessionTitle ?? actor.sessionId,
       createdAt: now, updatedAt: now,
     };
-    return { ok: true, board: { ...board, cards: [...board.cards, card] }, cardId: card.id };
+    return { ok: true, board: { ...board, cards: [...board.cards, card], nextCardNumber: number + 1 }, cardId: card.id };
   }
   const resolved = resolveKanbanToolCard(board, request.cardId, actor);
   if (!resolved.ok) return resolved;
@@ -206,7 +215,7 @@ export function applyKanbanToolMutation(
   if (!lane) return refused("Lane not found. Use kanban read to discover the current lane IDs.");
   if (lane.fixed && card.sessionId !== null) return refused("A linked card cannot enter Backlog. Keep it in a work lane; create independent tasks in Backlog.");
   const claiming = request.laneId !== undefined && !lane.fixed && card.sessionId === null;
-  if (claiming && current) return refused(`This session already owns card "${current.id}". Update that card instead of claiming another.`);
+  if (claiming && current) return refused(`This session already owns card "${kanbanCardKey(board, current)}". Update that card instead of claiming another.`);
   const title = request.title === undefined ? card.title : request.title.trim();
   const description = request.description === undefined ? card.description : request.description.trim();
   let next = board;
@@ -235,10 +244,11 @@ export function kanbanCardExcerpt(description: string, query = "", budget = KANB
   return `${leading ? "…" : ""}${text}${trailing ? "…" : ""}`;
 }
 
-/** The rows a search sends: id, title, lane and a bounded excerpt, never the full body. */
-export function kanbanCardSummary(card: KanbanCard, query = ""): KanbanCardSummaryData {
+/** The rows a search sends: id, key, title, lane and a bounded excerpt, never the full body. */
+export function kanbanCardSummary(board: KanbanBoard, card: KanbanCard, query = ""): KanbanCardSummaryData {
   return {
     id: card.id,
+    key: kanbanCardKey(board, card),
     title: card.title,
     laneId: card.laneId,
     ...(card.sessionId === null ? {} : { linked: true as const }),
@@ -260,10 +270,12 @@ const laneCardCounts = (board: KanbanBoard): Map<string, number> => {
  */
 export function kanbanToolOverview(board: KanbanBoard, revision: number, sessionId: string): KanbanToolResult {
   const counts = laneCardCounts(board);
+  const current = cardForSession(board, sessionId);
   return {
     ok: true,
     action: "read",
     projectDir: board.projectDir,
+    cardPrefix: board.cardPrefix,
     lanes: board.lanes.map((lane) => ({
       id: lane.id,
       name: lane.name,
@@ -272,7 +284,7 @@ export function kanbanToolOverview(board: KanbanBoard, revision: number, session
       cardCount: counts.get(lane.id) ?? 0,
     })),
     totalCards: board.cards.length,
-    currentCard: cardForSession(board, sessionId) ?? null,
+    currentCard: current ? cardData(board, current) : null,
     revision,
   };
 }
@@ -291,15 +303,15 @@ export function kanbanToolRead(
   comments: { comments: readonly KanbanComment[]; total: number } = { comments: [], total: 0 },
   activity: { activity: readonly KanbanActivity[]; total: number } = { activity: [], total: 0 },
 ): KanbanToolResult {
-  const card = board.cards.find((c) => c.id === cardId);
-  if (!card) return refused("Card not found in this project's board. Use kanban read without cardId, then kanban search, to discover current card IDs.");
+  const card = resolveKanbanCardRef(board, cardId);
+  if (!card) return refused("Card not found in this project's board. Use its key (like PIW-42), an id from kanban read, or search to discover current cards.");
   const index = board.lanes.findIndex((l) => l.id === card.laneId);
   if (index < 0) return refused("That card's lane is missing from this board. Read the board before continuing.");
   return {
     ok: true,
     action: "read",
     projectDir: board.projectDir,
-    card,
+    card: cardData(board, card),
     lane: board.lanes[index],
     nextLaneId: board.lanes[index + 1]?.id ?? null,
     currentCardId: cardForSession(board, sessionId)?.id ?? null,
@@ -320,9 +332,10 @@ export function kanbanToolSearch(board: KanbanBoard, revision: number, sessionId
     return refused("Lane not found. Use kanban read to discover the current lane IDs.");
   }
   const query = request.query ?? "";
-  const matched = board.cards.filter((card) => (request.laneId === undefined || card.laneId === request.laneId) && cardMatchesQuery(card, query));
+  const matched = board.cards.filter((card) => (request.laneId === undefined || card.laneId === request.laneId)
+    && cardMatchesQuery(card, query, kanbanCardKey(board, card)));
   const limit = request.limit ?? KANBAN_SEARCH_DEFAULT_LIMIT;
-  const cards = matched.slice(0, limit).map((card) => kanbanCardSummary(card, query));
+  const cards = matched.slice(0, limit).map((card) => kanbanCardSummary(board, card, query));
   const hasMore = matched.length > cards.length;
   const counts = laneCardCounts(board);
   return {
@@ -379,7 +392,7 @@ export function kanbanToolCommentResult(
     action: "comment",
     projectDir: board.projectDir,
     comment,
-    card,
+    card: cardData(board, card),
     lane: board.lanes[index],
     nextLaneId: board.lanes[index + 1]?.id ?? null,
     currentCardId: cardForSession(board, sessionId)?.id ?? null,
@@ -391,5 +404,5 @@ export function kanbanToolMutationResult(board: KanbanBoard, revision: number, s
   const card = board.cards.find((c) => c.id === cardId);
   const index = board.lanes.findIndex((l) => l.id === card?.laneId);
   if (!card || index < 0) return refused("The updated card or its lane is missing. Read the board before continuing.");
-  return { ok: true, action, card, lane: board.lanes[index], nextLaneId: board.lanes[index + 1]?.id ?? null, currentCardId: cardForSession(board, sessionId)?.id ?? null, revision };
+  return { ok: true, action, card: cardData(board, card), lane: board.lanes[index], nextLaneId: board.lanes[index + 1]?.id ?? null, currentCardId: cardForSession(board, sessionId)?.id ?? null, revision };
 }

@@ -483,6 +483,14 @@ export function kanbanReorderLane(projectDir: string | null, laneId: string, toI
 export function kanbanDeleteLane(projectDir: string | null, laneId: string): void {
   mutate(projectDir, { action: "delete-lane", laneId });
 }
+/**
+ * The board's card-key prefix (`PIW`, so cards read `PIW-42`). Renaming it
+ * renames every card at once and keeps the old prefix as an alias, so a
+ * reference written before the rename still resolves.
+ */
+export function kanbanSetCardPrefix(projectDir: string | null, prefix: string): void {
+  mutate(projectDir, { action: "set-card-prefix", prefix });
+}
 export function kanbanAddCard(
   projectDir: string | null,
   laneId: string,

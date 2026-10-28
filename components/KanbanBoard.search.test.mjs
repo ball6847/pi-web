@@ -80,10 +80,23 @@ test("HTML-looking title and description remain escaped text, never live element
   assert.match(html, /&lt;script&gt;<mark/);
 });
 
+test("a card's key is rendered and finds the card, like any other field", () => {
+  const keyed = { ...board, cardPrefix: "PRJ", nextCardNumber: 4, cards: board.cards.map((entry, index) => ({ ...entry, number: index + 1 })) };
+  const all = render(KanbanBoardView, { ...props, board: keyed, query: "" });
+  assert.deepEqual([...all.matchAll(/data-kanban-card-key="([^"]+)"/g)].map((m) => m[1]).sort(), ["PRJ-1", "PRJ-2", "PRJ-3"]);
+  // Typing the reference a commit message carries is the fastest way in.
+  const byKey = render(KanbanBoardView, { ...props, board: keyed, query: "prj-2" });
+  assert.deepEqual([...byKey.matchAll(/data-kanban-card="([^"]+)"/g)].map((m) => m[1]), ["2"]);
+  assert.match(byKey, /<mark[^>]*>PRJ-2<\/mark>/i);
+  // A board with no prefix yet renders no chips (an unloaded or legacy board).
+  assert.doesNotMatch(all.replace(/data-kanban-card-key="[^"]*"/g, ""), /data-kanban-card-key/);
+});
+
 test("new labels exist in all locales", async () => {
   const keys = ["searchLabel", "searchPlaceholder", "searchClear", "searchCount", "searchLaneCount", "searchNoResults", "searchLaneNoMatches", "searchMatchingLane", "searchReorderDisabled"];
+  const keyLabels = ["cardKeyTitle", "menuCopyKey", "configureCards", "configurePrefix", "configurePrefixInvalid", "configurePrefixHint", "configurePrefixAliases"];
   for (const locale of ["en", "zh-CN", "zh-TW"]) {
     const source = await readFile(new URL(`../lib/i18n/messages/${locale}.ts`, import.meta.url), "utf8");
-    for (const key of keys) assert.ok(source.includes(`"kanban.${key}":`), `${locale}: ${key}`);
+    for (const key of [...keys, ...keyLabels]) assert.ok(source.includes(`"kanban.${key}":`), `${locale}: ${key}`);
   }
 });

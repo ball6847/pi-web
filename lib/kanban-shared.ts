@@ -1,5 +1,6 @@
 import {
   makeKanbanId,
+  normalizeKanbanPrefix,
   type KanbanAction,
   type KanbanBoard,
   type KanbanCard,
@@ -51,6 +52,73 @@ export function firstWorkLane(board: KanbanBoard): KanbanLane | null {
 /** The lane a card sits in, for views that only need the name and position. */
 export function cardLaneOf(board: KanbanBoard, card: KanbanCard | null): KanbanLane | null {
   return card ? laneById(board, card.laneId) : null;
+}
+
+/**
+ * The number the next new card takes. `board.nextCardNumber` is the source of
+ * truth (it never moves back, so a deleted card's number is never handed out
+ * again); the cards are a floor only for a hand-edited board.
+ */
+export function nextCardNumber(board: KanbanBoard): number {
+  let highest = 0;
+  for (const card of board.cards) if (card.number > highest) highest = card.number;
+  return Math.max(1, board.nextCardNumber || 0, highest + 1);
+}
+
+/**
+ * The card a reference names: its storage id, its key (`PIW-42`, case
+ * insensitive, any prefix this board ever had) or, within one board, its bare
+ * number (`42`). Null for a reference that names nothing here — a key of
+ * another project's prefix included, so a stray reference never resolves to
+ * this board's card of the same number.
+ */
+export function resolveKanbanCardRef(board: KanbanBoard, ref: string | null | undefined): KanbanCard | null {
+  const value = (ref ?? "").trim();
+  if (!value) return null;
+  const byId = board.cards.find((card) => card.id === value);
+  if (byId) return byId;
+  const key = /^([A-Za-z][A-Za-z0-9]{1,9})-(\d{1,9})$/.exec(value);
+  if (key) {
+    const prefix = key[1].toUpperCase();
+    const known = [board.cardPrefix, ...(board.cardPrefixAliases ?? [])].map((entry) => entry.toUpperCase());
+    if (!known.includes(prefix)) return null;
+    const number = Number(key[2]);
+    return board.cards.find((card) => card.number === number) ?? null;
+  }
+  if (/^\d{1,9}$/.test(value)) return board.cards.find((card) => card.number === Number(value)) ?? null;
+  return null;
+}
+
+/** A reference as the storage id it names, or the reference itself when it names nothing (the reducer then refuses). */
+function refCardId(board: KanbanBoard, ref: string): string {
+  return resolveKanbanCardRef(board, ref)?.id ?? ref;
+}
+
+/**
+ * The route's actions with their card references resolved to storage ids, so a
+ * browser (or a stale tab) may name a card `PIW-42` wherever an id is taken.
+ * The client-chosen ids of `add-card` / `create-card-for-session` are left
+ * alone: they name a card that does not exist yet. An unresolvable reference
+ * is passed through unchanged, and the reducer refuses it as an unknown card.
+ */
+export function resolveKanbanActionRefs(board: KanbanBoard, action: KanbanAction): KanbanAction {
+  switch (action.action) {
+    case "edit-card":
+    case "delete-card":
+    case "advance-card":
+    case "link-session":
+    case "unlink-session": {
+      const cardId = refCardId(board, action.cardId);
+      return cardId === action.cardId ? action : { ...action, cardId };
+    }
+    case "move-card": {
+      const cardId = refCardId(board, action.cardId);
+      const beforeCardId = action.beforeCardId ? refCardId(board, action.beforeCardId) : action.beforeCardId;
+      return cardId === action.cardId && beforeCardId === action.beforeCardId ? action : { ...action, cardId, beforeCardId };
+    }
+    default:
+      return action;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +186,7 @@ export function addCard(
   if (sessionId && lane.fixed) return null; // The backlog never takes a session.
   const card: KanbanCard = {
     id,
+    number: nextCardNumber(board),
     title,
     description: (input.description ?? "").trim(),
     laneId,
@@ -127,7 +196,7 @@ export function addCard(
     updatedAt: now,
   };
   const others = sessionId ? dropOtherLinks(board.cards, sessionId, null, now) : board.cards;
-  return { ...board, cards: [...others, card] };
+  return { ...board, cards: [...others, card], nextCardNumber: card.number + 1 };
 }
 
 /**
@@ -376,8 +445,7 @@ export function reorderLane(board: KanbanBoard, laneId: string, toIndex: number)
  * Removes a work lane. Its cards are relocated to the backlog, which holds no
  * session: a card that carried one is unlinked (the snapshot title stays).
  * Refused (null) for an unknown lane or the fixed backlog.
- */
-export function deleteLane(board: KanbanBoard, laneId: string, now: number): KanbanBoard | null {
+ */export function deleteLane(board: KanbanBoard, laneId: string, now: number): KanbanBoard | null {
   const lane = laneById(board, laneId);
   const backlog = board.lanes.find((l) => l.fixed);
   if (!lane || lane.fixed || !backlog) return null;
@@ -388,6 +456,36 @@ export function deleteLane(board: KanbanBoard, laneId: string, now: number): Kan
       card.laneId === laneId ? { ...card, laneId: backlog.id, sessionId: null, updatedAt: now } : card,
     ),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Card keys
+// ---------------------------------------------------------------------------
+
+/** How many former prefixes a board keeps resolving after a rename. */
+export const KANBAN_PREFIX_ALIAS_LIMIT = 5;
+
+/**
+ * The board's card-key prefix (`PIW`, so cards read `PIW-42`). Renaming it
+ * renames every card at once — no card row holds a key — and the previous
+ * prefix stays as an alias, so a reference written before the rename still
+ * resolves. Refused (null) for a value that is not a prefix; the same prefix
+ * changes nothing.
+ */
+export function setCardPrefix(board: KanbanBoard, prefix: string): KanbanBoard | null {
+  const normalized = normalizeKanbanPrefix(prefix);
+  if (!normalized) return null;
+  if (normalized === board.cardPrefix) return board;
+  const aliases: string[] = [];
+  for (const candidate of [board.cardPrefix, ...(board.cardPrefixAliases ?? [])]) {
+    if (!candidate || candidate === normalized || aliases.includes(candidate)) continue;
+    aliases.push(candidate);
+    if (aliases.length >= KANBAN_PREFIX_ALIAS_LIMIT) break;
+  }
+  const next: KanbanBoard = { ...board, cardPrefix: normalized };
+  if (aliases.length > 0) next.cardPrefixAliases = aliases;
+  else delete next.cardPrefixAliases;
+  return next;
 }
 
 // ---------------------------------------------------------------------------
@@ -466,5 +564,7 @@ export function applyKanbanAction(board: KanbanBoard, request: KanbanAction, now
       return reorderLane(board, request.laneId, request.toIndex);
     case "delete-lane":
       return deleteLane(board, request.laneId, now);
+    case "set-card-prefix":
+      return setCardPrefix(board, request.prefix);
   }
 }

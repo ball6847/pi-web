@@ -27,7 +27,11 @@ import {
   type KanbanBoard as KanbanBoardData,
   type KanbanCard,
   type KanbanLane,
+  KANBAN_PREFIX_MAX,
+  kanbanCardKey,
+  normalizeKanbanPrefix,
 } from "@/lib/kanban-types";
+import { copyText } from "@/lib/clipboard";
 import { cardsOfLane, canRestInLane } from "@/lib/kanban-shared";
 import { kanbanDescriptionExcerpt, normalizeKanbanQuery, searchKanbanBoard } from "@/lib/kanban-search";
 import { KanbanSearchField, KanbanSearchStyles, KanbanSearchText } from "./KanbanSearch";
@@ -44,6 +48,7 @@ import {
   kanbanMoveLane,
   kanbanReorderLane,
   kanbanRenameLane,
+  kanbanSetCardPrefix,
   kanbanUnlinkCard,
   kanbanUpdateCard,
   useKanbanBoardStatus,
@@ -587,6 +592,7 @@ function SessionPicker({
 export function CardView({
   lane,
   card,
+  cardKey,
   isLastLane,
   running,
   awaiting,
@@ -606,6 +612,8 @@ export function CardView({
 }: {
   lane: KanbanLane;
   card: KanbanCard;
+  /** The card's human handle (`PIW-42`), rendered from the board's prefix. Absent: no chip. */
+  cardKey?: string;
   isLastLane: boolean;
   running: boolean;
   /** The linked session is parked on an extension's dialog: beats `running`. */
@@ -699,6 +707,24 @@ export function CardView({
     >
       <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
+          {cardKey && (
+            <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 2 }}>
+              <span
+                data-kanban-card-key={cardKey}
+                title={t("kanban.cardKeyTitle", { key: cardKey })}
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 9.5,
+                  fontWeight: 500,
+                  letterSpacing: 0.2,
+                  color: "var(--text-dim)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <KanbanSearchText text={cardKey} query={query} />
+              </span>
+            </div>
+          )}
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
             {done && (
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -1056,6 +1082,7 @@ export function LaneColumn({
   lane,
   isLast,
   sessions,
+  cardPrefix,
   runningIds,
   awaitingIds,
   unreadIds,
@@ -1087,6 +1114,8 @@ export function LaneColumn({
   lane: KanbanLane;
   isLast: boolean;
   sessions: SessionInfo[];
+  /** The board's card-key prefix, so a card can render its `PIW-42` handle. */
+  cardPrefix: string;
   runningIds: Set<string>;
   awaitingIds: Set<string>;
   unreadIds: Set<string>;
@@ -1241,6 +1270,7 @@ export function LaneColumn({
               <CardView
                 lane={lane}
                 card={card}
+                cardKey={cardPrefix ? kanbanCardKey({ cardPrefix }, card) : undefined}
                 isLastLane={isLast}
                 running={card.sessionId !== null && runningIds.has(card.sessionId)}
                 awaiting={card.sessionId !== null && awaitingIds.has(card.sessionId)}
@@ -1387,6 +1417,21 @@ function LaneConfig({
   const { t } = useI18n();
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const [newName, setNewName] = useState("");
+  // The card-key prefix: typed here, saved on Enter or blur like a lane's name.
+  const [prefix, setPrefix] = useState(board.cardPrefix);
+  useEffect(() => {
+    setPrefix(board.cardPrefix);
+  }, [board.cardPrefix]);
+  const normalizedPrefix = normalizeKanbanPrefix(prefix);
+  const savePrefix = () => {
+    const next = normalizeKanbanPrefix(prefix);
+    if (!next || next === board.cardPrefix) {
+      // An invalid field springs back to what the board actually uses.
+      if (!next) setPrefix(board.cardPrefix);
+      return;
+    }
+    kanbanSetCardPrefix(projectDir, next);
+  };
 
   // Drag reordering: a row's grip lifts it, the accent line shows where the
   // lane will land (never past the fixed backlog), and the up/down buttons
@@ -1460,6 +1505,51 @@ function LaneConfig({
           ref={rowListRef}
           style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 6 }}
         >
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: "var(--text-dim)" }}>
+              {t("kanban.configureCards")}
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <label htmlFor="kanban-card-prefix" style={{ fontSize: 11.5, color: "var(--text-muted)", flexShrink: 0 }}>
+                {t("kanban.configurePrefix")}
+              </label>
+              <input
+                id="kanban-card-prefix"
+                value={prefix}
+                maxLength={KANBAN_PREFIX_MAX}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(event) => setPrefix(event.target.value.toUpperCase())}
+                onBlur={savePrefix}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    savePrefix();
+                    event.currentTarget.blur();
+                  }
+                }}
+                style={{
+                  width: 110,
+                  padding: "5px 8px",
+                  fontSize: 12,
+                  fontFamily: "var(--font-mono)",
+                  letterSpacing: 0.4,
+                  color: "var(--text)",
+                  background: "var(--bg)",
+                  border: `1px solid ${normalizedPrefix ? "var(--border)" : "#e5484d"}`,
+                  borderRadius: 6,
+                  outline: "none",
+                }}
+              />
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-dim)" }}>
+                {normalizedPrefix ? `${normalizedPrefix}-${board.nextCardNumber}` : t("kanban.configurePrefixInvalid")}
+              </span>
+            </div>
+            <p style={{ margin: 0, fontSize: 11, lineHeight: 1.6, color: "var(--text-dim)" }}>
+              {t("kanban.configurePrefixHint")}
+              {board.cardPrefixAliases?.length ? ` ${t("kanban.configurePrefixAliases", { list: board.cardPrefixAliases.join(", ") })}` : ""}
+            </p>
+          </div>
           {board.lanes.map((lane, index) => (
             <Fragment key={lane.id}>
               {lineBefore === index && <LaneDropLine />}
@@ -2001,6 +2091,15 @@ export function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardDa
       label: t("kanban.menuEdit"),
       onSelect: () => openForm(menuCard.laneId, menuCard),
     });
+    // The card's key is what a commit message, a branch name or a prompt
+    // carries: one click, no retyping.
+    entries.push({
+      id: "copy-key",
+      label: t("kanban.menuCopyKey", { key: kanbanCardKey(board, menuCard) }),
+      onSelect: () => {
+        void copyText(kanbanCardKey(board, menuCard));
+      },
+    });
     // Ordering inside the lane: the keyboard and phone peer of dropping a card
     // between two others (a drag cannot cross lanes on a phone's one-lane view).
     const laneCards = cardsOfLane(board, menuCard.laneId);
@@ -2201,6 +2300,7 @@ export function KanbanBoardView(props: KanbanBoardProps & { board: KanbanBoardDa
             lane={lane}
             isLast={laneIndex === board.lanes.length - 1}
             sessions={sessions}
+            cardPrefix={board.cardPrefix}
             runningIds={runningSessionIds}
             awaitingIds={awaitingInputSessionIds}
             unreadIds={unreadSessionIds}

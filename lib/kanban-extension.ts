@@ -6,7 +6,7 @@ import { KanbanToolOutputSchema, KanbanToolParameters } from "./kanban-tool-sche
 import { isReadOnlySelection } from "./mcp-read-only-policy";
 import { readSessionToolSelection } from "./session-tool-selection";
 import { KANBAN_LANE_INSTRUCTIONS_MAX, KANBAN_NOTICE_LANE_LIMIT } from "./kanban-tool-limits";
-import type { KanbanCard, KanbanLane } from "./kanban-types";
+import { kanbanCardKey, type KanbanCard, type KanbanLane } from "./kanban-types";
 import type { SessionEntry } from "./types";
 
 export const KANBAN_EXTENSION_NAME = "pi-web-kanban";
@@ -112,7 +112,15 @@ export function kanbanLaneInstructionsText(lanes: KanbanLane[], card: KanbanCard
 export function kanbanCardNotice(
   lanes: KanbanLane[],
   card: KanbanCard | null,
-  options: { wasTracked?: boolean; cardChanged?: boolean; lanesChanged?: boolean; laneInstrChanged?: boolean; laneInstrDropped?: boolean } = {},
+  options: {
+    wasTracked?: boolean;
+    cardChanged?: boolean;
+    lanesChanged?: boolean;
+    laneInstrChanged?: boolean;
+    laneInstrDropped?: boolean;
+    /** The card's human key (`PIW-42`): what the model and the user both read. Falls back to the id. */
+    cardKey?: string;
+  } = {},
 ): { state: KanbanNoticeState; content: string } {
   const state: KanbanNoticeState = {
     card: kanbanCardSignature(card),
@@ -122,7 +130,7 @@ export function kanbanCardNotice(
   const lines: string[] = [];
   if (options.cardChanged !== false) {
     if (card) {
-      lines.push(`Kanban: this session is on card ${card.id}. `
+      lines.push(`Kanban: this session is on card ${options.cardKey ?? card.id}. `
         + "Always keep its lane matching your actual status with kanban update (no cardId).");
     }
     else if (options.wasTracked) lines.push("Kanban: this session is no longer on a Kanban card.");
@@ -204,6 +212,7 @@ async function cardNoticeForRun(ctx: ExtensionContext, memory: NoticeMemory) {
   // Each half speaks for itself: a link change never re-sends the lanes, and
   // neither re-sends the lane instructions.
   const notice = kanbanCardNotice(snapshot.board.lanes, card, {
+    cardKey: card ? kanbanCardKey(snapshot.board, card) : undefined,
     wasTracked: prior !== undefined && prior.card !== KANBAN_NO_CARD,
     cardChanged: prior === undefined || prior.card !== kanbanCardSignature(card),
     lanesChanged: prior === undefined || prior.lanes !== kanbanLaneSignature(snapshot.board.lanes),
@@ -244,6 +253,7 @@ export function createKanbanExtension(options?: { isReadOnly?: (ctx: ExtensionCo
           + "read with no cardId lists the lanes with their card counts and your own linked card; it never sends every card body. "
           + "search finds cards by literal text (title or description) and/or one laneId, returning at most `limit` compact rows (id, title, laneId, excerpt); narrow with query instead of raising limit. "
           + "read with cardId returns that one card in full, with its newest comments (bounded). "
+          + "A card is named by its key (like PIW-42, shown in every read and on the board) or its id; both work as cardId. "
           + "create requires title and defaults to an independent, sessionless Backlog card; an explicit work lane attaches it to this session. "
           + "update patches title/description/laneId; omitted fields stay unchanged, empty description clears it. Omit cardId to update your linked card. "
           + "An explicit work lane on a free card claims it. Never edit another session's card or claim a second card. Linked cards cannot enter Backlog. "

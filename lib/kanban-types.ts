@@ -22,6 +22,13 @@ export interface KanbanLane {
 
 export interface KanbanCard {
   id: string;
+  /**
+   * The card's number on this board: 1, 2, 3… assigned once at creation, never
+   * reused after a delete, and never changed by an edit. `0` only appears on a
+   * hand-edited row the reader repairs. The human handle is the key the board
+   * renders from this number (`PIW-42`); the `id` stays the storage key.
+   */
+  number: number;
   title: string;
   description: string;
   laneId: string;
@@ -37,6 +44,16 @@ export interface KanbanBoard {
   projectDir: string;
   lanes: KanbanLane[];
   cards: KanbanCard[];
+  /**
+   * The board's card-key prefix (`PIW`, so a card reads `PIW-42`). One per
+   * project, stored in the board file, rendered never stored on a card: a
+   * rename therefore renames every card at once without touching a row.
+   */
+  cardPrefix: string;
+  /** The number the next new card takes. Monotonic: a deleted card's number is never reused. */
+  nextCardNumber: number;
+  /** Prefixes this board used before a rename, so old references still resolve. Never rendered. */
+  cardPrefixAliases?: string[];
 }
 
 /**
@@ -113,7 +130,38 @@ export const KANBAN_ACTIVITY_PAGE_LIMIT = 50;
 export const KANBAN_ACTIVITY_KEEP = 200;
 
 /** The SQLite board file's schema stamp (`PRAGMA user_version`). */
-export const KANBAN_SCHEMA_VERSION = 4;
+export const KANBAN_SCHEMA_VERSION = 5;
+
+/** A card key's prefix: 2–10 characters, a letter first, then letters and digits (no dash — it is the separator). */
+export const KANBAN_PREFIX_MIN = 2;
+export const KANBAN_PREFIX_MAX = 10;
+const PREFIX_PATTERN = /^[A-Za-z][A-Za-z0-9]{1,9}$/;
+
+/** Uppercases and validates a prefix; null when it cannot be a card prefix. */
+export function normalizeKanbanPrefix(value: string): string | null {
+  const trimmed = value.trim().toUpperCase();
+  return PREFIX_PATTERN.test(trimmed) ? trimmed : null;
+}
+
+/**
+ * The prefix a board starts with, derived from the project root's own name:
+ * letters and digits of the last path segment, uppercased and shortened
+ * (`pi-web` → `PIWEB`). Only the initial default — the user may rename it.
+ */
+export function defaultCardPrefix(projectDir: string): string {
+  const segment = projectDir.replace(/[/\\]+$/, "").split(/[/\\]/).pop() ?? "";
+  const letters = segment.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  if (letters.length >= KANBAN_PREFIX_MIN) return letters.slice(0, 5);
+  // A folder called `1` or `…` has no usable name: CARD is honest, and unique
+  // enough once the store's collision suffix is applied.
+  return "CARD";
+}
+
+/** The human handle of a card: `PIW-42`. Rendered from the board, never stored. */
+export function kanbanCardKey(board: Pick<KanbanBoard, "cardPrefix">, card: Pick<KanbanCard, "number">): string {
+  return `${board.cardPrefix}-${card.number}`;
+}
+
 
 /**
  * The last version the replaced JSON storage wrote. Its files are frozen at 1
@@ -189,7 +237,8 @@ export type KanbanAction =
   | { action: "edit-lane"; laneId: string; description?: string; instructions?: string }
   | { action: "move-lane"; laneId: string; direction: -1 | 1 }
   | { action: "reorder-lane"; laneId: string; toIndex: number }
-  | { action: "delete-lane"; laneId: string };
+  | { action: "delete-lane"; laneId: string }
+  | { action: "set-card-prefix"; prefix: string };
 
 /**
  * A write about a card's comments. It is deliberately NOT a `KanbanAction`: a
@@ -221,6 +270,7 @@ export const KANBAN_ACTION_NAMES: readonly KanbanActionName[] = [
   "move-lane",
   "reorder-lane",
   "delete-lane",
+  "set-card-prefix",
 ];
 
 /** The route's answer to a read and to every successful mutation. */
