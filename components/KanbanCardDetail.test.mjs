@@ -41,7 +41,7 @@ function card(laneId, extra = {}) {
   return { id: "card-1", number: 7, title: "A card", description: "Details", laneId, sessionId: null, sessionTitle: null, createdAt: 0, updatedAt: 0, ...extra };
 }
 
-function setup() {
+function setup(options = {}) {
   const calls = [];
   let board = null;
   const context = vm.createContext({
@@ -50,7 +50,7 @@ function setup() {
     // The key plus the interpolation, so a test can name either.
     useI18n: () => ({ t: (key, params) => (params ? `${key}:${params.lane ?? ""}` : key) }),
     useKanbanBoard: () => board,
-    useKanbanCardComments: () => ({ status: "ready", comments: [], total: 0 }),
+    useKanbanCardComments: () => ({ status: "ready", comments: options.comments ?? [], total: (options.comments ?? []).length }),
     // The activity journal (another feature's route): an empty, ready page.
     useKanbanCardActivity: () => ({ activity: [], total: 0, status: "ready", hasMore: false, loadingOlder: false, loadOlder: noop }),
     kanbanCardKey,
@@ -240,4 +240,29 @@ test("a project with no sessions says so in the session menu instead of opening 
   assert.equal(entries.length, 1);
   assert.equal(entries[0].label, "kanban.cardFormSessionRequired");
   assert.equal(entries[0].disabled, true);
+});
+
+test("the preview keeps the card's own line breaks, as the writer laid them out", (t) => {
+  const ui = setup();
+  t.after(() => ui.cleanup());
+  // Agents write a card one point per line; a soft ending is a new line on
+  // screen, not a space (the editor's and the preview's text stay identical).
+  const description = "- bullet one\n- bullet two\nParagraph line\nnext line";
+  const view = ui.render(boardOf([card("lane-todo", { description })]));
+
+  const preview = all(view.result, (node) => node.type === "MarkdownBody")[0];
+  assert.ok(preview, "a card with a description opens in Preview");
+  assert.equal(preview.props.keepLineBreaks, true, "a typed note is not typeset: every line ending stays a line");
+  assert.deepEqual(preview.props.children, [description], "and the editor's text is what is rendered");
+  assert.equal(preview.props.cwd, "/project", "local file links still resolve against the project");
+});
+
+test("every authored body in the tab keeps its line breaks, notes included", () => {
+  // A note is written by a person or an agent in the same editor the card is;
+  // `CommentEntry` renders inside its own component, so the tree walk above
+  // cannot reach it — the file itself is the check: no `<MarkdownBody` here may
+  // opt out of `keepLineBreaks` (the typeset reading is for generated prose).
+  const bodies = text.match(/<MarkdownBody[^>]*>/g) ?? [];
+  assert.ok(bodies.length >= 2, "the description preview and a note's body");
+  for (const body of bodies) assert.match(body, /keepLineBreaks/, `typeset rendering in a detail tab: ${body}`);
 });

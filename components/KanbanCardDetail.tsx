@@ -232,7 +232,9 @@ function CommentEntry({
         )}
       </div>
       <div style={{ fontSize: 12, lineHeight: 1.5, color: "var(--text)" }}>
-        <MarkdownBody>
+        {/* A note is typed, not typeset: every line ending stays a line, as
+            the writer (person or agent) laid it out. */}
+        <MarkdownBody keepLineBreaks>
           {comment.body}
         </MarkdownBody>
       </div>
@@ -442,6 +444,16 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
   const [sessionMenuAnchor, setSessionMenuAnchor] = useState<DOMRect | null>(null);
   const lastSynced = useRef("");
   const titleRef = useRef<HTMLInputElement | null>(null);
+  const titleAutoFocused = useRef(false);
+
+  // A new card starts in this tab: the title field takes the caret as soon as
+  // the editor is on screen, so writing one needs no click first. Waits for the
+  // board (the tab shows "loading" until then) and happens once per tab.
+  useEffect(() => {
+    if (!draft || !board || titleAutoFocused.current) return;
+    titleAutoFocused.current = true;
+    titleRef.current?.focus();
+  }, [board, draft]);
 
   // A card changed elsewhere (another tab, the agent's own `update`): adopt it,
   // unless this editor holds unsaved text for the same card.
@@ -932,7 +944,7 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
               }}
             >
               {description ? (
-                <MarkdownBody cwd={projectDir} onOpenFile={onOpenFile}>
+                <MarkdownBody keepLineBreaks cwd={projectDir} onOpenFile={onOpenFile}>
                   {description}
                 </MarkdownBody>
               ) : (
