@@ -1,8 +1,10 @@
+import { KANBAN_NOTICE_TEMPLATE_MAX, KANBAN_REMINDER_TURNS_MAX } from "./kanban-tool-limits";
 import {
   makeKanbanId,
   normalizeKanbanPrefix,
   type KanbanAction,
   type KanbanBoard,
+  type KanbanBoardNotice,
   type KanbanCard,
   type KanbanLane,
 } from "./kanban-types";
@@ -489,6 +491,82 @@ export function setCardPrefix(board: KanbanBoard, prefix: string): KanbanBoard |
 }
 
 // ---------------------------------------------------------------------------
+// The agent notice
+// ---------------------------------------------------------------------------
+
+/**
+ * The card line a run gets when the user has not written one. It names the lane
+ * the card sits in — the one fact a model has to compare against what it is
+ * doing — and says how to move it. `{…}` are the template's placeholders, filled
+ * from `kanbanNoticeValues()`; a template is plain text, never Markdown (it is
+ * injected as context, not drawn).
+ */
+export const KANBAN_NOTICE_TEMPLATE_DEFAULT =
+  "Kanban: this session is on card {cardKey} in {lane} ({laneId}). Keep that lane matching what you are actually doing, "
+  + "and move it with kanban update (no cardId) as soon as it stops matching — one lane at a time as the work advances, "
+  + "never straight to the last lane.";
+
+/** A board's notice, with the defaults a board that never stored one reads as. */
+export function kanbanBoardNotice(board: Pick<KanbanBoard, "notice">): KanbanBoardNotice {
+  return { template: board.notice?.template ?? "", reminderTurns: board.notice?.reminderTurns ?? 0 };
+}
+
+/** What a template's placeholders resolve to. */
+export interface KanbanNoticeValues {
+  /** The card's human key (`PIWEB-38`). */
+  cardKey: string;
+  cardId: string;
+  title: string;
+  /** The lane's current name, and its id — the handle `kanban update` takes. */
+  lane: string;
+  laneId: string;
+}
+
+/** The placeholders of one card: the only values a template may interpolate. */
+export function kanbanNoticeValues(lanes: KanbanLane[], card: KanbanCard, cardKey: string): KanbanNoticeValues {
+  return {
+    cardKey,
+    cardId: card.id,
+    title: card.title,
+    lane: lanes.find((entry) => entry.id === card.laneId)?.name ?? card.laneId,
+    laneId: card.laneId,
+  };
+}
+
+/**
+ * A template with its placeholders filled. A blank template is the built-in
+ * line, and an unknown `{token}` is left as it is: a typo the user can see in
+ * the dialog's preview rather than a silently empty sentence in a run.
+ */
+export function renderKanbanNoticeTemplate(template: string, values: KanbanNoticeValues): string {
+  const text = template.trim() || KANBAN_NOTICE_TEMPLATE_DEFAULT;
+  return text.replace(/\{(cardKey|cardId|title|lane|laneId)\}/g, (_token, name: keyof KanbanNoticeValues) => values[name]);
+}
+
+/**
+ * The board's agent notice (`set-notice`): the card line's template and the
+ * reminder's turn count. Refused (null) for a turn count that is not a positive
+ * integer within the cap or zero; an empty template with no reminder drops the
+ * field entirely, so the board reads as one that never stored a notice.
+ */
+export function setNotice(
+  board: KanbanBoard,
+  patch: { template?: string; reminderTurns?: number },
+): KanbanBoard | null {
+  const current = kanbanBoardNotice(board);
+  const template = patch.template === undefined
+    ? current.template
+    : [...patch.template.trim()].slice(0, KANBAN_NOTICE_TEMPLATE_MAX).join("");
+  const turns = patch.reminderTurns === undefined ? current.reminderTurns : patch.reminderTurns;
+  if (!Number.isInteger(turns) || turns < 0 || turns > KANBAN_REMINDER_TURNS_MAX) return null;
+  if (template === current.template && turns === current.reminderTurns) return board;
+  const next: KanbanBoard = { ...board };
+  if (!template && turns === 0) delete next.notice;
+  else next.notice = { template, reminderTurns: turns };
+  return next;
+}
+
+// ---------------------------------------------------------------------------
 // A new session's card
 // ---------------------------------------------------------------------------
 
@@ -566,5 +644,7 @@ export function applyKanbanAction(board: KanbanBoard, request: KanbanAction, now
       return deleteLane(board, request.laneId, now);
     case "set-card-prefix":
       return setCardPrefix(board, request.prefix);
+    case "set-notice":
+      return setNotice(board, { template: request.template, reminderTurns: request.reminderTurns });
   }
 }

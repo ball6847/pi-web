@@ -40,6 +40,21 @@ export interface KanbanCard {
   updatedAt: number;
 }
 
+/**
+ * The board's agent notice, as the project's Configure dialog edits it: the line
+ * a run gets about its card (a template with placeholders) and how often that
+ * line is repeated while the run keeps going (every N turns, 0 = never).
+ * Absent from a board that never stored one — the injected face of the board's
+ * rules, kept beside the lanes' instructions rather than in a global setting so
+ * one project can be tuned without touching the others.
+ */
+export interface KanbanBoardNotice {
+  /** The card line's template; `""` means the built-in line (`KANBAN_NOTICE_TEMPLATE_DEFAULT`). */
+  template: string;
+  /** Re-send the card line every N turns of a session; `0` is off. */
+  reminderTurns: number;
+}
+
 export interface KanbanBoard {
   projectDir: string;
   lanes: KanbanLane[];
@@ -54,6 +69,8 @@ export interface KanbanBoard {
   nextCardNumber: number;
   /** Prefixes this board used before a rename, so old references still resolve. Never rendered. */
   cardPrefixAliases?: string[];
+  /** What a run is told about its card, and how often. Absent: the built-in line, no reminder. */
+  notice?: KanbanBoardNotice;
 }
 
 /**
@@ -238,7 +255,8 @@ export type KanbanAction =
   | { action: "move-lane"; laneId: string; direction: -1 | 1 }
   | { action: "reorder-lane"; laneId: string; toIndex: number }
   | { action: "delete-lane"; laneId: string }
-  | { action: "set-card-prefix"; prefix: string };
+  | { action: "set-card-prefix"; prefix: string }
+  | { action: "set-notice"; template?: string; reminderTurns?: number };
 
 /**
  * A write about a card's comments. It is deliberately NOT a `KanbanAction`: a
@@ -271,6 +289,7 @@ export const KANBAN_ACTION_NAMES: readonly KanbanActionName[] = [
   "reorder-lane",
   "delete-lane",
   "set-card-prefix",
+  "set-notice",
 ];
 
 /** The route's answer to a read and to every successful mutation. */
