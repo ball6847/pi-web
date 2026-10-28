@@ -26,6 +26,19 @@ export const KANBAN_NOTICE_LANE_LIMIT = 24;
 export const KANBAN_LANE_INSTRUCTIONS_MAX = 2000;
 
 /**
+ * Characters the board's notice template may hold — the route's cap and the
+ * injection's own bound. One line of instructions is the point; a paragraph
+ * paid once per link change is still cheap, a document is not.
+ */
+export const KANBAN_NOTICE_TEMPLATE_MAX = 1200;
+
+/**
+ * The reminder's turn ceiling: 0 is off, and past this the notice is once a
+ * session that a user can better tune with the template itself.
+ */
+export const KANBAN_REMINDER_TURNS_MAX = 100;
+
+/**
  * Code points one comment may hold — the route's write cap and the agent tool's
  * (a note is a handoff paragraph or a short list, not a document; the card's
  * description is where the long text goes).

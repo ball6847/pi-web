@@ -9,6 +9,7 @@ import {
   defaultLanes,
   type KanbanActivity,
   type KanbanBoard,
+  type KanbanBoardNotice,
   type KanbanCard,
   type KanbanComment,
   type KanbanLane,
@@ -526,6 +527,7 @@ export function readBoardRows(db: DatabaseSync, projectDir: string): KanbanSnaps
       nextCardNumber += 1;
     }
     const cardPrefixAliases = meta.prefixAliases.length ? { cardPrefixAliases: meta.prefixAliases } : {};
+    const notice = meta.notice ? { notice: meta.notice } : {};
     return {
       board: {
         projectDir,
@@ -534,6 +536,7 @@ export function readBoardRows(db: DatabaseSync, projectDir: string): KanbanSnaps
         cardPrefix: meta.cardPrefix ?? defaultCardPrefix(projectDir),
         nextCardNumber,
         ...cardPrefixAliases,
+        ...notice,
       },
       revision: readBoardRevision(db),
       storedCardPrefix: meta.cardPrefix !== null,
@@ -593,6 +596,7 @@ export function bumpRevision(db: DatabaseSync): number {
 const META_CARD_PREFIX = "card_prefix";
 const META_CARD_PREFIX_ALIASES = "card_prefix_aliases";
 const META_NEXT_CARD_NUMBER = "next_card_number";
+const META_NOTICE = "notice";
 
 /** The board's card-key state, as the `meta` rows hold it (absent before the first write). */
 export interface KanbanCardKeyMeta {
@@ -602,6 +606,8 @@ export interface KanbanCardKeyMeta {
   prefixAliases: string[];
   /** 0 when the board never stored one: the reader derives it from the cards. */
   nextCardNumber: number;
+  /** The agent notice, or null when the board never stored one (the built-in line, no reminder). */
+  notice: KanbanBoardNotice | null;
 }
 
 function readMetaValue(db: DatabaseSync, key: string): string | null {
@@ -621,6 +627,24 @@ function parseAliases(raw: string | null): string[] {
   }
 }
 
+/** The `notice` row is one JSON object; anything unreadable reads as no notice at all. */
+function parseNotice(raw: string | null): KanbanBoardNotice | null {
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const value = parsed as { template?: unknown; reminderTurns?: unknown };
+  const template = typeof value.template === "string" ? value.template : "";
+  const turns = typeof value.reminderTurns === "number" && Number.isFinite(value.reminderTurns)
+    ? Math.max(0, Math.trunc(value.reminderTurns))
+    : 0;
+  return { template, reminderTurns: turns };
+}
+
 /** The board's card-key meta rows. Never creates anything: a missing row reads as its default. */
 export function readBoardMeta(db: DatabaseSync): KanbanCardKeyMeta {
   const nextCardNumber = Number(readMetaValue(db, META_NEXT_CARD_NUMBER) ?? 0);
@@ -628,6 +652,7 @@ export function readBoardMeta(db: DatabaseSync): KanbanCardKeyMeta {
     cardPrefix: readMetaValue(db, META_CARD_PREFIX) || null,
     prefixAliases: parseAliases(readMetaValue(db, META_CARD_PREFIX_ALIASES)),
     nextCardNumber: Number.isFinite(nextCardNumber) ? Math.max(0, Math.trunc(nextCardNumber)) : 0,
+    notice: parseNotice(readMetaValue(db, META_NOTICE)),
   };
 }
 
@@ -638,6 +663,9 @@ function writeBoardMeta(db: DatabaseSync, board: KanbanBoard): void {
   const aliases = board.cardPrefixAliases ?? [];
   if (aliases.length > 0) write.run(META_CARD_PREFIX_ALIASES, JSON.stringify(aliases));
   else db.prepare("DELETE FROM meta WHERE key = ?").run(META_CARD_PREFIX_ALIASES);
+  const notice = board.notice;
+  if (notice && (notice.template || notice.reminderTurns > 0)) write.run(META_NOTICE, JSON.stringify(notice));
+  else db.prepare("DELETE FROM meta WHERE key = ?").run(META_NOTICE);
 }
 
 // ---------------------------------------------------------------------------
