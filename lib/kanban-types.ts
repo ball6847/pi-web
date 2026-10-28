@@ -65,8 +65,55 @@ export interface KanbanCommentsResponse {
   revision: number;
 }
 
+/**
+ * One automatic entry of a card's history: what the board did to the card,
+ * derived from the write that did it (never posted by a browser). It is stored
+ * in its own table beside the comments, read per card, and kept out of the
+ * board payload and the run notice exactly like a thread.
+ */
+export interface KanbanActivity {
+  id: string;
+  cardId: string;
+  kind: KanbanActivityKind;
+  /** Where it came from: the previous lane name, the old title, the unlinked session's name. */
+  from: string | null;
+  /** Where it arrived: the new lane name, the new title, the linked session's name. */
+  to: string | null;
+  /** The session whose tool call made the change; null for a person in the browser. */
+  actorSessionId: string | null;
+  actorSessionTitle: string | null;
+  createdAt: number;
+}
+
+/**
+ * - `created`: the card was added to a lane.
+ * - `moved`: it changed lane (a drag, a menu move, the demo advance, `kanban update`).
+ * - `title` / `description`: its text was edited.
+ * - `linked` / `unlinked`: a session came or went.
+ * - `lane-deleted`: its lane was removed and the card relocated — one row, not a move plus an unlink.
+ *
+ * A position-only reorder inside a lane is not an event: it would add a row to
+ * every drag with nothing for a reader to learn.
+ */
+export type KanbanActivityKind = "created" | "moved" | "title" | "description" | "linked" | "unlinked" | "lane-deleted";
+
+/** What `GET /api/kanban/activity` answers: one card's history, oldest first. */
+export interface KanbanActivityResponse {
+  cardId: string;
+  activity: KanbanActivity[];
+  /** Every entry of the card, including the ones this page left out. */
+  total: number;
+  revision: number;
+}
+
+/** `GET /api/kanban/activity` answers at most this many rows per request. */
+export const KANBAN_ACTIVITY_PAGE_LIMIT = 50;
+
+/** Events kept per card; the oldest are dropped as new ones are written. */
+export const KANBAN_ACTIVITY_KEEP = 200;
+
 /** The SQLite board file's schema stamp (`PRAGMA user_version`). */
-export const KANBAN_SCHEMA_VERSION = 3;
+export const KANBAN_SCHEMA_VERSION = 4;
 
 /**
  * The last version the replaced JSON storage wrote. Its files are frozen at 1

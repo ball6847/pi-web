@@ -3,8 +3,10 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
+  KANBAN_ACTIVITY_KEEP,
   KANBAN_SCHEMA_VERSION,
   defaultLanes,
+  type KanbanActivity,
   type KanbanBoard,
   type KanbanCard,
   type KanbanComment,
@@ -82,6 +84,23 @@ CREATE UNIQUE INDEX cards_session ON cards(session_id) WHERE session_id IS NOT N
 CREATE INDEX cards_lane ON cards(lane_id, position);
 CREATE INDEX cards_updated ON cards(updated_at);
 CREATE INDEX card_comments_card ON card_comments(card_id, created_at);
+
+-- A card's activity: derived by the store from each board write and append-only.
+-- No foreign key for the same reason card_comments has none: the board's writes
+-- replace the card rows wholesale, so a cascade would take the history with it
+-- on an unrelated edit. writeBoardRows prunes rows whose card is gone.
+CREATE TABLE card_activity (
+  id                  TEXT PRIMARY KEY,
+  card_id             TEXT NOT NULL,
+  kind                TEXT NOT NULL,
+  from_value          TEXT,
+  to_value            TEXT,
+  actor_session_id    TEXT,
+  actor_session_title TEXT,
+  created_at          INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX card_activity_card ON card_activity(card_id);
 `;
 
 /** The agent directory's file name of a board. */
@@ -220,6 +239,20 @@ const MIGRATIONS: Record<number, string[]> = {
     ) STRICT`,
     "CREATE INDEX card_comments_card ON card_comments(card_id, created_at)",
   ],
+  // v3 -> v4: a card's activity trail (a new table, so no existing row changes).
+  3: [
+    `CREATE TABLE card_activity (
+      id                  TEXT PRIMARY KEY,
+      card_id            TEXT NOT NULL,
+      kind                TEXT NOT NULL,
+      from_value          TEXT,
+      to_value            TEXT,
+      actor_session_id    TEXT,
+      actor_session_title TEXT,
+      created_at          INTEGER NOT NULL
+    ) STRICT`,
+    "CREATE INDEX card_activity_card ON card_activity(card_id)",
+  ],
 };
 
 /**
@@ -336,6 +369,38 @@ interface CommentRow {
   created_at: number;
 }
 
+interface ActivityRow {
+  id: string;
+  card_id: string;
+  kind: string;
+  from_value: string | null;
+  to_value: string | null;
+  actor_session_id: string | null;
+  actor_session_title: string | null;
+  created_at: number;
+}
+
+const ACTIVITY_KINDS = new Set<KanbanActivity["kind"]>(["created", "moved", "title", "description", "linked", "unlinked", "lane-deleted"]);
+
+/**
+ * A hand-edited row with an unknown kind is dropped, not guessed at: the trail
+ * is a log, and a reader cannot use an event it does not understand.
+ */
+function toActivity(row: ActivityRow): KanbanActivity | null {
+  const kind = row.kind as KanbanActivity["kind"];
+  if (!ACTIVITY_KINDS.has(kind)) return null;
+  return {
+    id: row.id,
+    cardId: row.card_id,
+    kind,
+    from: row.from_value,
+    to: row.to_value,
+    actorSessionId: row.actor_session_id || null,
+    actorSessionTitle: row.actor_session_title,
+    createdAt: Number(row.created_at),
+  };
+}
+
 function toComment(row: CommentRow): KanbanComment {
   return {
     id: row.id,
@@ -436,9 +501,10 @@ export function writeBoardRows(db: DatabaseSync, board: KanbanBoard): number {
   for (const [position, entry] of board.cards.entries()) {
     card.run(entry.id, position, entry.laneId, entry.title, entry.description, entry.sessionId, entry.sessionTitle, entry.createdAt, entry.updatedAt);
   }
-  // A card that is gone takes its thread: the one cleanup rule, applied where
-  // the board is written (a comment is never a row of `cards`).
+  // A card that is gone takes its thread and its history: the one cleanup
+  // rule, applied where the board is written (neither is a row of `cards`).
   db.exec("DELETE FROM card_comments WHERE card_id NOT IN (SELECT id FROM cards)");
+  db.exec("DELETE FROM card_activity WHERE card_id NOT IN (SELECT id FROM cards)");
   return bumpRevision(db);
 }
 
@@ -483,19 +549,86 @@ export function deleteCardComment(db: DatabaseSync, commentId: string): string |
   return row.card_id;
 }
 
+// ---------------------------------------------------------------------------
+// Activity
+// ---------------------------------------------------------------------------
+
+/**
+ * One card's activity, oldest first. `limit` keeps the newest rows of the page
+ * that ends before `beforeId` (the cursor is the oldest row already shown), so
+ * the detail tab can page backwards without an offset that a concurrent write
+ * would shift. `total` counts the whole trail.
+ */
+export function readCardActivity(
+  db: DatabaseSync,
+  cardId: string,
+  limit = 50,
+  beforeId: string | null = null,
+): { activity: KanbanActivity[]; total: number } {
+  const total = db.prepare("SELECT count(*) AS n FROM card_activity WHERE card_id = ?").get(cardId) as { n?: number } | undefined;
+  const size = Math.max(1, Math.trunc(limit));
+  const columns = "id, card_id, kind, from_value, to_value, actor_session_id, actor_session_title, created_at";
+  let rows: ActivityRow[];
+  if (beforeId) {
+    const cursor = db.prepare("SELECT rowid AS seq FROM card_activity WHERE id = ? AND card_id = ?").get(beforeId, cardId) as
+      | { seq?: number }
+      | undefined;
+    // An unknown cursor (a row another tab already pruned) reads the newest page
+    // instead of failing: the tab then simply shows its own first page again.
+    rows = cursor?.seq === undefined
+      ? (db.prepare(`SELECT ${columns} FROM card_activity WHERE card_id = ? ORDER BY rowid DESC LIMIT ?`).all(cardId, size) as unknown as ActivityRow[])
+      : (db
+          .prepare(`SELECT ${columns} FROM card_activity WHERE card_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?`)
+          .all(cardId, cursor.seq, size) as unknown as ActivityRow[]);
+  } else {
+    rows = db.prepare(`SELECT ${columns} FROM card_activity WHERE card_id = ? ORDER BY rowid DESC LIMIT ?`).all(cardId, size) as unknown as ActivityRow[];
+  }
+  return {
+    activity: rows.map(toActivity).filter((entry): entry is KanbanActivity => entry !== null).reverse(),
+    total: Number(total?.n ?? 0),
+  };
+}
+
+/**
+ * Appends events and keeps each touched card's trail at `KANBAN_ACTIVITY_KEEP`
+ * rows: a board file lives forever, a card's history does not need to. Call
+ * inside the write's transaction.
+ */
+export function insertCardActivity(db: DatabaseSync, events: readonly KanbanActivity[]): void {
+  if (events.length === 0) return;
+  const insert = db.prepare(
+    "INSERT INTO card_activity (id, card_id, kind, from_value, to_value, actor_session_id, actor_session_title, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  );
+  const touched = new Set<string>();
+  for (const event of events) {
+    insert.run(event.id, event.cardId, event.kind, event.from, event.to, event.actorSessionId, event.actorSessionTitle, event.createdAt);
+    touched.add(event.cardId);
+  }
+  const prune = db.prepare(
+    `DELETE FROM card_activity
+      WHERE card_id = ?
+        AND rowid <= (SELECT rowid FROM card_activity WHERE card_id = ? ORDER BY rowid DESC LIMIT 1 OFFSET ?)`,
+  );
+  for (const cardId of touched) prune.run(cardId, cardId, KANBAN_ACTIVITY_KEEP);
+}
+
 /**
  * Creates the board schema and its opening revision (`1`), in one transaction:
  * the default lanes for a board that has never been written, or the rows of a
  * board being put in place (the JSON import). The caller has checked the file
  * is not an older board — those are migrated by `migrateKanbanDatabase`, never
- * re-created.
+ * re-created. `activity` is the trail the mutation that created this file
+ * produced (an `add-card` on a project with no board yet): it lands in the same
+ * transaction, so a new board's first card is not the one card with no history.
  */
-export function initializeBoard(db: DatabaseSync, board: KanbanBoard): number {
+export function initializeBoard(db: DatabaseSync, board: KanbanBoard, activity: readonly KanbanActivity[] = []): number {
   return inTransaction(db, () => {
     db.exec(SCHEMA);
     db.exec(`PRAGMA user_version = ${KANBAN_SCHEMA_VERSION}`);
     db.prepare("INSERT INTO meta (key, value) VALUES ('revision', '0')").run();
-    return writeBoardRows(db, board);
+    const revision = writeBoardRows(db, board);
+    insertCardActivity(db, activity);
+    return revision;
   });
 }
 

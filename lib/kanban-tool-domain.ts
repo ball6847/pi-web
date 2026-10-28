@@ -1,6 +1,7 @@
 import { cardForSession, moveCardToLane } from "./kanban-shared";
 import { cardMatchesQuery, kanbanDescriptionExcerpt } from "./kanban-search";
 import {
+  KANBAN_ACTIVITY_READ_LIMIT,
   KANBAN_CARD_EXCERPT_BUDGET,
   KANBAN_COMMENT_BUDGET,
   KANBAN_COMMENT_MAX,
@@ -9,7 +10,7 @@ import {
   KANBAN_SEARCH_MAX_LIMIT,
 } from "./kanban-tool-limits";
 import type { KanbanFailureCode } from "./kanban-store";
-import type { KanbanBoard, KanbanCard, KanbanComment, KanbanLane } from "./kanban-types";
+import type { KanbanActivity, KanbanActivityKind, KanbanBoard, KanbanCard, KanbanComment, KanbanLane } from "./kanban-types";
 
 /** Agent requests are deliberately separate from the browser's link-stealing actions. */
 export type KanbanToolRequest =
@@ -29,6 +30,17 @@ type CardData = { [K in keyof KanbanCard]: KanbanCard[K] };
 type LaneData = { [K in keyof KanbanLane]: KanbanLane[K] };
 /** One comment as a card read sends it: the head of a long note, never the whole thread. */
 type CommentData = { [K in keyof KanbanComment]: KanbanComment[K] };
+/** One activity line as a card read sends it: no ids, no timestamps beyond `at`, one line each. */
+export type KanbanActivityLineData = {
+  kind: KanbanActivityKind;
+  at: number;
+  /** The value left behind (previous lane, old title, unlinked session); omitted when none. */
+  from?: string;
+  /** The value arrived at (new lane, new title, linked session); omitted when none. */
+  to?: string;
+  /** The session whose tool call made the change, when the agent did it. */
+  actor?: string;
+};
 /** A lane without its cards: enough to choose one, cheap enough to always send. */
 export type KanbanLaneOverviewData = { id: string; name: string; description: string; fixed?: boolean; cardCount: number };
 /** One search hit: no id-less body, just the field a model picks a card with. */
@@ -53,6 +65,9 @@ export type KanbanToolResult = KanbanToolFailure | {
   /** The newest entries, oldest first, each body bounded; `commentCount` counts them all. */
   comments: CommentData[];
   commentCount: number;
+  /** The newest activity rows, oldest first, one line each; `activityTotal` counts them all. */
+  activity: KanbanActivityLineData[];
+  activityTotal: number;
 } | {
   ok: true;
   action: "comment";
@@ -263,8 +278,10 @@ export function kanbanToolOverview(board: KanbanBoard, revision: number, session
 }
 
 /**
- * `read { cardId }`: exactly one card, in full, with the lane it sits in and the
- * newest comments (bounded) — the handoff a session needs to pick the work up.
+ * `read { cardId }`: exactly one card, in full, with the lane it sits in, the
+ * newest comments (bounded) and the newest activity rows — the handoff a
+ * session needs to pick the work up without reading its predecessor's
+ * transcript.
  */
 export function kanbanToolRead(
   board: KanbanBoard,
@@ -272,6 +289,7 @@ export function kanbanToolRead(
   sessionId: string,
   cardId: string,
   comments: { comments: readonly KanbanComment[]; total: number } = { comments: [], total: 0 },
+  activity: { activity: readonly KanbanActivity[]; total: number } = { activity: [], total: 0 },
 ): KanbanToolResult {
   const card = board.cards.find((c) => c.id === cardId);
   if (!card) return refused("Card not found in this project's board. Use kanban read without cardId, then kanban search, to discover current card IDs.");
@@ -288,6 +306,8 @@ export function kanbanToolRead(
     revision,
     comments: kanbanToolComments(comments.comments),
     commentCount: comments.total,
+    activity: kanbanToolActivity(activity.activity),
+    activityTotal: activity.total,
   };
 }
 
@@ -318,6 +338,17 @@ export function kanbanToolSearch(board: KanbanBoard, revision: number, sessionId
     currentCardId: cardForSession(board, sessionId)?.id ?? null,
     revision,
   };
+}
+
+/** The newest activity rows of a card as one line each, oldest first. */
+export function kanbanToolActivity(activity: readonly KanbanActivity[]): KanbanActivityLineData[] {
+  return activity.slice(-KANBAN_ACTIVITY_READ_LIMIT).map((event) => ({
+    kind: event.kind,
+    at: event.createdAt,
+    ...(event.from === null ? {} : { from: event.from }),
+    ...(event.to === null ? {} : { to: event.to }),
+    ...(event.actorSessionId === null ? {} : { actor: event.actorSessionTitle ?? event.actorSessionId }),
+  }));
 }
 
 /** The newest comments of a card, each body bounded, oldest first. */

@@ -37,6 +37,12 @@ const Comment = Type.Object({
   id: Type.String(), cardId: Type.String(), author: StringEnum(["user", "agent"] as const),
   sessionId: NullableString, sessionTitle: NullableString, body: Type.String(), createdAt: Type.Number(),
 });
+/* One history line: what happened, when, and the values it moved between. */
+const ActivityLine = Type.Object({
+  kind: StringEnum(["created", "moved", "title", "description", "linked", "unlinked", "lane-deleted"] as const),
+  at: Type.Number(), from: Type.Optional(Type.String()), to: Type.Optional(Type.String()),
+  actor: Type.Optional(Type.String()),
+});
 const CardSummary = Type.Object({
   id: Type.String(), title: Type.String(), laneId: Type.String(),
   linked: Type.Optional(Type.Literal(true)), excerpt: Type.String(),
@@ -53,6 +59,7 @@ export const KanbanToolOutputSchema = Type.Union([
     ok: Type.Literal(true), action: Type.Literal("read"), projectDir: Type.String(),
     card: Card, lane: Lane, nextLaneId: NullableString, ...Position,
     comments: Type.Array(Comment), commentCount: Type.Number(),
+    activity: Type.Array(ActivityLine), activityTotal: Type.Number(),
   }),
   Type.Object({
     ok: Type.Literal(true), action: Type.Literal("comment"), projectDir: Type.String(),
