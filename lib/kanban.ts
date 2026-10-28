@@ -28,6 +28,7 @@ import {
   type KanbanBoard,
   type KanbanBoardResponse,
   type KanbanCard,
+  type KanbanActivity,
   type KanbanComment,
   type KanbanLane,
 } from "./kanban-types";
@@ -749,3 +750,195 @@ export function kanbanDeleteCardComment(projectDir: string | null, cardId: strin
   if (!projectDir || !cardId) return;
   void postComment(projectDir, cardId, { action: "delete-comment", commentId });
 }
+
+// ---------------------------------------------------------------------------
+// Activity
+// ---------------------------------------------------------------------------
+// A card's history is a third read of its own (`GET /api/kanban/activity`),
+// beside the comments and for the same reason: the board payload is fetched
+// whole on every revision bump and the poll costs one row, so history stays out
+// of it. The rows are never written by a browser — the server derives them from
+// the board write that caused them — so this cache only reads. A revision bump
+// refetches the newest page and keeps whatever older pages this tab already
+// loaded: a reader who scrolled back does not lose their place because the
+// agent moved the card.
+
+export type KanbanActivityStatus = "loading" | "ready" | "error";
+
+export interface KanbanActivityView {
+  /** Oldest first, exactly as they are rendered and as the server answered them. */
+  activity: KanbanActivity[];
+  /** Every entry of the card, including the ones this view left out. */
+  total: number;
+  status: KanbanActivityStatus;
+  error?: string;
+  /** Older rows exist beyond the ones loaded (`Load older`). */
+  hasMore: boolean;
+  /** A `Load older` page is in flight. */
+  loadingOlder: boolean;
+  loadOlder(): void;
+}
+
+const EMPTY_ACTIVITY: KanbanActivity[] = [];
+
+interface ActivityEntry {
+  activity: KanbanActivity[];
+  total: number;
+  revision: number | null;
+  status: KanbanActivityStatus;
+  error: string | null;
+  loadingOlder: boolean;
+  view: KanbanActivityView;
+  /** Bumped by every first-page fetch: an answer that arrives after a newer one is dropped. */
+  loadId: number;
+  loadOlder(): void;
+}
+
+const activityEntries = new Map<string, ActivityEntry>();
+const activityListeners = new Set<() => void>();
+
+function subscribeActivity(listener: () => void): () => void {
+  activityListeners.add(listener);
+  return () => {
+    activityListeners.delete(listener);
+  };
+}
+
+function activityKey(projectDir: string, cardId: string): string {
+  return `${projectDir}\u0000${cardId}`;
+}
+
+/** The stable view `useSyncExternalStore` needs: a new one only when something it shows changed. */
+function publishActivity(entry: ActivityEntry): void {
+  const error = entry.error ?? undefined;
+  const hasMore = entry.activity.length < entry.total;
+  const view = entry.view;
+  if (
+    view.activity !== entry.activity ||
+    view.total !== entry.total ||
+    view.status !== entry.status ||
+    view.error !== error ||
+    view.hasMore !== hasMore ||
+    view.loadingOlder !== entry.loadingOlder
+  ) {
+    entry.view = {
+      activity: entry.activity,
+      total: entry.total,
+      status: entry.status,
+      ...(error === undefined ? {} : { error }),
+      hasMore,
+      loadingOlder: entry.loadingOlder,
+      loadOlder: entry.loadOlder,
+    };
+  }
+  for (const listener of activityListeners) listener();
+}
+
+/**
+ * Fetches the newest page (`before` = null, laid in front of the older pages
+ * this tab already holds) or one older page (`before` = the oldest row shown).
+ */
+async function fetchActivity(key: string, projectDir: string, cardId: string, before: string | null): Promise<void> {
+  const entry = activityEntries.get(key);
+  if (!entry) return;
+  if (before === null) entry.loadId += 1;
+  const loadId = entry.loadId;
+  if (before !== null) {
+    entry.loadingOlder = true;
+    publishActivity(entry);
+  }
+  try {
+    const cursor = before === null ? "" : `&before=${encodeURIComponent(before)}`;
+    const body = await requestJson(
+      `${KANBAN_URL}/activity?cwd=${encodeURIComponent(projectDir)}&cardId=${encodeURIComponent(cardId)}${cursor}`,
+    );
+    if (loadId !== entry.loadId) return;
+    const page = Array.isArray(body.activity) ? (body.activity as KanbanActivity[]) : EMPTY_ACTIVITY;
+    if (before === null) {
+      // Rows this tab loaded earlier are older than the newest page's first row,
+      // so they keep their place in front of it.
+      const known = new Set(page.map((event) => event.id));
+      const older = entry.activity.filter((event) => !known.has(event.id));
+      entry.activity = older.length === 0 ? page : [...older, ...page];
+    } else {
+      entry.activity = [...page, ...entry.activity];
+    }
+    entry.total = typeof body.total === "number" ? body.total : entry.activity.length;
+    entry.revision = typeof body.revision === "number" ? body.revision : null;
+    entry.status = "ready";
+    entry.error = null;
+  } catch (err) {
+    if (loadId !== entry.loadId) return;
+    if (before === null) {
+      entry.status = "error";
+      entry.error = errorMessage(err);
+    }
+  } finally {
+    if (before !== null && loadId === entry.loadId) entry.loadingOlder = false;
+    publishActivity(entry);
+  }
+}
+
+function activityEntryFor(projectDir: string, cardId: string): ActivityEntry {
+  const key = activityKey(projectDir, cardId);
+  let entry = activityEntries.get(key);
+  if (!entry) {
+    const created: ActivityEntry = {
+      activity: EMPTY_ACTIVITY,
+      total: 0,
+      revision: null,
+      status: "loading",
+      error: null,
+      loadingOlder: false,
+      view: {
+        activity: EMPTY_ACTIVITY,
+        total: 0,
+        status: "loading",
+        hasMore: false,
+        loadingOlder: false,
+        loadOlder: () => {},
+      },
+      loadId: 0,
+      loadOlder: () => {
+        const oldest = created.activity[0];
+        if (!oldest || created.loadingOlder || created.activity.length >= created.total) return;
+        void fetchActivity(key, projectDir, cardId, oldest.id);
+      },
+    };
+    entry = created;
+    activityEntries.set(key, entry);
+  }
+  return entry;
+}
+
+/**
+ * One card's activity, oldest first. Loaded when the card is first shown and
+ * refetched whenever the board revision moves (which is how the agent's move or
+ * another tab's edit reaches this one); `loadOlder` pages backwards on demand.
+ * `null` card reads as empty.
+ */
+export function useKanbanCardActivity(projectDir: string | null, cardId: string | null): KanbanActivityView {
+  const revision = useKanbanBoardRevision(projectDir);
+  const key = projectDir && cardId ? activityKey(projectDir, cardId) : null;
+  const getSnapshot = useCallback(
+    () => (key ? activityEntries.get(key)?.view : undefined) ?? EMPTY_ACTIVITY_VIEW,
+    [key],
+  );
+  const view = useSyncExternalStore(subscribeActivity, getSnapshot, () => EMPTY_ACTIVITY_VIEW);
+  useEffect(() => {
+    if (!projectDir || !cardId) return;
+    const entry = activityEntryFor(projectDir, cardId);
+    if (entry.status === "ready" && entry.revision === revision) return;
+    void fetchActivity(activityKey(projectDir, cardId), projectDir, cardId, null);
+  }, [projectDir, cardId, revision]);
+  return view;
+}
+
+const EMPTY_ACTIVITY_VIEW: KanbanActivityView = {
+  activity: EMPTY_ACTIVITY,
+  total: 0,
+  status: "ready",
+  hasMore: false,
+  loadingOlder: false,
+  loadOlder: () => {},
+};

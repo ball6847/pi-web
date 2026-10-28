@@ -3,11 +3,13 @@ import { dirname, join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import lockfile from "proper-lockfile";
 import { serializeByKey } from "./key-serializer";
+import { deriveKanbanActivity, type KanbanActivityActor } from "./kanban-activity";
 import {
   bumpRevision,
   closeKanbanDatabase,
   deleteCardComment,
   freshBoard,
+  insertCardActivity,
   insertCardComment,
   initializeBoard,
   inspectKanbanFile,
@@ -18,6 +20,7 @@ import {
   openKanbanDatabase,
   readBoardRevision,
   readBoardRows,
+  readCardActivity,
   readCardComments,
   writeBoardRows,
   type KanbanSnapshot,
@@ -30,10 +33,12 @@ import {
 } from "./kanban-tool-domain";
 import { KANBAN_COMMENT_PAGE_LIMIT } from "./kanban-tool-limits";
 import {
+  KANBAN_ACTIVITY_PAGE_LIMIT,
   KANBAN_JSON_SCHEMA_VERSION,
   KANBAN_SCHEMA_VERSION,
   makeKanbanId,
   type KanbanAction,
+  type KanbanActivity,
   type KanbanBoard,
   type KanbanCard,
   type KanbanComment,
@@ -573,11 +578,16 @@ type EditResult = { board: KanbanBoard; comments?: CommentWrite[] } | KanbanFail
  * writes the rows when the edit returned a different board. By default a
  * refused edit still materializes a missing file; agent calls opt out.
  * The connection is closed and the lock released on every path.
+ *
+ * The activity trail is derived here, from the before and after boards, in the
+ * same transaction: no caller can post an event, and a write that changed
+ * nothing (the same board object) records nothing. `activityActor` is the
+ * session whose tool call made the change, for the rows' attribution.
  */
 async function editBoard(
   projectRoot: string,
   edit: (board: KanbanBoard, now: number) => Promise<EditResult>,
-  options: { signal?: AbortSignal; materializeRefused?: boolean } = {},
+  options: { signal?: AbortSignal; materializeRefused?: boolean; activityActor?: KanbanActivityActor } = {},
 ): Promise<KanbanBoardResult> {
   const path = kanbanBoardPath(projectRoot);
   return serializeByKey(QUEUE_KEY, path, async () => {
@@ -600,25 +610,29 @@ async function editBoard(
         const seed = opened.kind === "ready" ? null : await seedBoard(projectRoot);
         const board = opened.kind === "ready" ? opened.snapshot.board : seed!.board;
         checkKanbanSignal(options.signal);
-        const result = await edit(board, Date.now());
+        const at = Date.now();
+        const result = await edit(board, at);
         checkKanbanSignal(options.signal);
         // Agent refusals must not initialize, migrate or repair a board. The
         // browser's existing materializing-refusal behavior remains the default.
         if ("ok" in result && options.materializeRefused === false) return result;
         const next = "board" in result ? result.board : board;
         const commentWrites = "board" in result ? result.comments ?? [] : [];
+        const activity = next === board ? [] : deriveKanbanActivity(board, next, at, options.activityActor);
         let db: DatabaseSync;
         if (opened.kind === "ready") {
           db = opened.db;
           if (next !== board || commentWrites.length > 0) {
             inTransaction(db, () => {
-              // One revision bump covers both: a comment is as much a change the
-              // other clients must see as a card move is.
+              // One revision bump covers all of it: a comment is as much a change
+              // the other clients must see as a card move is, and an activity row
+              // only ever rides on a board write.
               if (next !== board) writeBoardRows(db, next);
               for (const write of commentWrites) {
                 if (write.kind === "add") insertCardComment(db, write.comment);
                 else deleteCardComment(db, write.commentId);
               }
+              insertCardActivity(db, activity);
               if (next === board) bumpRevision(db);
             });
           }
@@ -626,7 +640,7 @@ async function editBoard(
           if (opened.kind === "corrupt") backUpUnusableBoard(path);
           db = opened.kind === "empty" ? opened.db : (createdDb = openKanbanDatabase(path, { timeout: DB_TIMEOUT_MS }));
           // The first successful mutation and seed land in one transaction too.
-          initializeBoard(db, next);
+          initializeBoard(db, next, activity);
         }
         for (const source of seed?.sources ?? []) retireImportedFile(source);
         return "ok" in result ? result : { ok: true, board: next, revision: readBoardRevision(db) };
@@ -729,7 +743,11 @@ export async function executeKanbanToolRequest(
       // never pulls the whole board's comments, and the overview pulls none.
       const thread = await readCardCommentsFor(valid.cwd, request.cardId);
       const comments = thread.ok ? { comments: thread.comments, total: thread.total } : { comments: [], total: 0 };
-      return kanbanToolRead(snapshot.board, snapshot.revision, actor.sessionId, request.cardId, comments);
+      // A card's history, bounded the same way: the newest few rows ride on the
+      // one-card read so a fresh session can see what its predecessor did.
+      const trail = await readCardActivityFor(valid.cwd, request.cardId);
+      const activity = trail.ok ? { activity: trail.activity, total: trail.total } : { activity: [], total: 0 };
+      return kanbanToolRead(snapshot.board, snapshot.revision, actor.sessionId, request.cardId, comments, activity);
     }
     let cardId = "";
     let written: KanbanComment | null = null;
@@ -755,7 +773,7 @@ export async function executeKanbanToolRequest(
       if (!next.ok) return next;
       cardId = next.cardId;
       return { board: next.board };
-    }, { signal, materializeRefused: false });
+    }, { signal, materializeRefused: false, activityActor: { sessionId: actor.sessionId, sessionTitle: actor.sessionTitle ?? null } });
     if (!edited.ok) return edited;
     if (request.action === "comment") {
       return written
@@ -792,7 +810,7 @@ export async function attachNewSessionCard(
       }
       freshAttachments.set(session.sessionId, Date.now());
       return { board: next };
-    }, { materializeRefused: false });
+    }, { materializeRefused: false, activityActor: { sessionId: session.sessionId, sessionTitle: session.sessionTitle } });
   } catch (error) {
     return toFailure(error);
   }
@@ -825,6 +843,45 @@ export async function readCardCommentsFor(
     try {
       const { comments, total } = readCardComments(opened.db, cardId, limit);
       return { ok: true, comments, total, revision: opened.snapshot.revision };
+    } finally {
+      closeOpened(opened);
+    }
+  } catch (error) {
+    return toFailure(error);
+  }
+}
+
+/**
+ * One card's activity, oldest first: the detail tab's own read, and the
+ * one-card read's bounded projection. Never creating, never pruning — a board
+ * that has none answers empty (revision 0) — and kept out of `GET /api/kanban`
+ * so the board payload and its poll stay small however long a card's history
+ * grows. `before` is the oldest row this reader already shows: the next page
+ * goes back from there.
+ */
+export async function readCardActivityFor(
+  cwd: string,
+  cardId: string,
+  limit = KANBAN_ACTIVITY_PAGE_LIMIT,
+  before: string | null = null,
+): Promise<{ ok: true; activity: KanbanActivity[]; total: number; revision: number } | KanbanFailure> {
+  const valid = await validateKanbanCwd(cwd);
+  if (!valid.ok) return valid;
+  const projectRoot = await boardProjectRoot(valid.cwd);
+  const path = kanbanBoardPath(projectRoot);
+  try {
+    const opened = openBoard(path, projectRoot);
+    if (opened.kind === "newer") {
+      closeOpened(opened);
+      throw new KanbanSchemaError(unsupportedSchemaMessage(opened.version));
+    }
+    if (opened.kind !== "ready") {
+      closeOpened(opened);
+      return { ok: true, activity: [], total: 0, revision: 0 };
+    }
+    try {
+      const { activity, total } = readCardActivity(opened.db, cardId, limit, before);
+      return { ok: true, activity, total, revision: opened.snapshot.revision };
     } finally {
       closeOpened(opened);
     }
