@@ -165,6 +165,7 @@ export const zhCNLocale: LocalePlugin = {
     "agents.scope.workspace": "工作区",
     "agents.scope.project": "项目",
     "agents.overridden": "被覆盖",
+    "subagent.openChat": "打开子代理会话",
     "subagent.openTab": "在侧栏面板中查看子代理工作",
     "subagent.closeTab": "关闭子代理侧栏面板",
     "subagent.tabLabel": "子代理 {name}",
