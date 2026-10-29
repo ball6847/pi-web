@@ -1,7 +1,8 @@
 import type { ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
-import { cardForSession, kanbanBoardNotice, kanbanNoticeValues, renderKanbanNoticeTemplate } from "./kanban-shared";
+import { cardForSession, kanbanBoardNotice, KANBAN_DELEGATED_NOTICE_TEMPLATE, kanbanNoticeValues, renderKanbanNoticeTemplate } from "./kanban-shared";
 import { executeKanbanToolRequest, readBoard } from "./kanban-store";
 import { parseKanbanToolRequest, type KanbanToolResult } from "./kanban-tool-domain";
+import { readSessionDelegatedFrom } from "./session-reader";
 import { KanbanToolOutputSchema, KanbanToolParameters } from "./kanban-tool-schema";
 import { isReadOnlySelection } from "./mcp-read-only-policy";
 import { readSessionToolSelection } from "./session-tool-selection";
@@ -65,9 +66,15 @@ export function kanbanBoardLanesText(lanes: KanbanLane[]): string {
   return rest > 0 ? `${shown.join(",")} +${rest} more (kanban read lists them)` : shown.join(",");
 }
 
-/** The link, not the card: an id, so a move or a rename is not a state transition worth a line. */
+/**
+ * The card half's identity: the card and the lane it sits in. The lane is part of
+ * it because another session can move the card between this session's runs — the
+ * owner, or a session the owner delegated to — and that move is exactly what the
+ * model has to hear before it acts again. A rename or a description edit stays
+ * out: neither changes where the card is.
+ */
 export function kanbanCardSignature(card: KanbanCard | null): string {
-  return card ? card.id : KANBAN_NO_CARD;
+  return card ? `${card.id}#${card.laneId}` : KANBAN_NO_CARD;
 }
 
 /** The lanes' identity: ids in board order, so adding, removing or reordering one is a change. */
@@ -253,16 +260,29 @@ async function cardNoticeForRun(ctx: ExtensionContext, memory: NoticeMemory) {
   const sessionId = ctx.sessionManager.getSessionId();
   const context = contextEntries(ctx);
   const prior = priorState(ctx, memory, sessionId, context);
-  const card = cardForSession(snapshot.board, sessionId) ?? null;
+  const own = cardForSession(snapshot.board, sessionId) ?? null;
+  // A delegated session owns no card, so its card half is its caller's — the
+  // reason the tool lets it act there. Resolved only when it has none of its own:
+  // an owner never pays for this read.
+  const delegatedFrom = own === null ? await readSessionDelegatedFrom(sessionId) : null;
+  const delegatedCard = delegatedFrom === null
+    ? null
+    : snapshot.board.cards.find((entry) => entry.sessionId === delegatedFrom) ?? null;
+  const delegated = own === null && delegatedCard !== null;
+  const card = own ?? delegatedCard;
   const cardKey = card ? kanbanCardKey(snapshot.board, card) : undefined;
   const laneInstr = kanbanLaneInstructionSignature(snapshot.board.lanes, card);
   const boardNotice = kanbanBoardNotice(snapshot.board);
-  const textSignature = kanbanTemplateSignature(boardNotice.template);
+  // The line's source: the board's template is the owner's wording for the
+  // owner's facts ("this session is on card …", "move it with no cardId"), and
+  // both are wrong for a delegated session.
+  const lineTemplate = delegated ? KANBAN_DELEGATED_NOTICE_TEMPLATE : boardNotice.template;
+  const textSignature = kanbanTemplateSignature(lineTemplate);
   // Each half speaks for itself: a link change never re-sends the lanes, and
   // neither re-sends the lane instructions.
   const notice = kanbanCardNotice(snapshot.board.lanes, card, {
     cardKey,
-    template: boardNotice.template,
+    template: lineTemplate,
     wasTracked: prior !== undefined && prior.card !== KANBAN_NO_CARD,
     // The wording is part of the card half: an edited template is exactly the
     // experiment the board's own setting exists for, so the next turn hears it.
@@ -284,7 +304,7 @@ async function cardNoticeForRun(ctx: ExtensionContext, memory: NoticeMemory) {
   // current one, so the model can compare it against what it is doing. A session
   // with no card is never reminded — there is no lane to keep in sync.
   const reminder = !changed && every > 0 && turns >= every && card !== null
-    ? kanbanCardNoticeLine(snapshot.board.lanes, card, cardKey ?? card.id, boardNotice.template)
+    ? kanbanCardNoticeLine(snapshot.board.lanes, card, cardKey ?? card.id, lineTemplate)
     : null;
   memory.set(sessionId, { state: notice.state, seenAt: context.length, turns: changed || reminder !== null ? 0 : turns });
   if (changed) {
@@ -324,6 +344,7 @@ export function createKanbanExtension(options?: { isReadOnly?: (ctx: ExtensionCo
           + "create requires title and defaults to an independent, sessionless Backlog card; an explicit work lane attaches it to this session. "
           + "update patches title/description/laneId; omitted fields stay unchanged, empty description clears it. Omit cardId to update your linked card. "
           + "An explicit work lane on a free card claims it. Never edit another session's card or claim a second card. Linked cards cannot enter Backlog. "
+          + "A card owned by the session that delegated work to you is the one exception: pass its cardId (read prints its key) to comment on it or move it one lane forward; leave its title and description to its owner. "
           + "comment writes one note to a card's thread (your linked card when cardId is omitted): record the handoff, the decision and what is left, as the work moves. "
           + "Use explicit lane IDs from read; same-lane updates do not reorder. Read-only sessions may read and search only. "
           + "Create is not idempotent: do not blindly retry it. For delegation, create a Backlog task and pass its cardId in the existing Agent prompt; this tool launches nothing.",
