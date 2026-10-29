@@ -1719,18 +1719,14 @@ export function AppShell() {
     () => sessionsForKanbanBoard(sessionsWithSelection, boardProjectDir),
     [boardProjectDir, sessionsWithSelection],
   );
-  const handleKanbanOpenSession = useCallback((sessionId: string, title: string) => {
+  const handleKanbanOpenSession = useCallback((sessionId: string) => {
     const target = boardSessions.find((session) => session.id === sessionId);
     if (!target) return;
-    if (target.relation?.kind === "subagent") {
-      // Viewing never selects/reopens the child. Keep the chat workspace too:
-      // a different project's board must not trigger changeFileWorkspace(),
-      // which drops agent tabs. The viewer reads the child by id alone.
-      handleOpenSubagentTab(target.id, target.name || target.firstMessage || title);
-    } else {
-      handleSelectSession(target);
-    }
-  }, [boardSessions, handleOpenSubagentTab, handleSelectSession]);
+    // A child's card opens the child's own chat, as every other session link
+    // does; the read-only viewer is reached only from the switcher's side-panel
+    // button. Selecting never starts or reopens the child.
+    handleSelectSession(target);
+  }, [boardSessions, handleSelectSession]);
   // The read-only viewer's hand-over: a sub-agent is prompted in its parent's
   // chat, so select the parent and open the agent switcher on the child's row.
   // The order matters — handleSelectSession() closes the top panel when the

@@ -25,53 +25,29 @@ function evaluate(name, context) {
 const parent = { id: "parent", cwd: "/board", name: "Parent" };
 const child = { id: "child", cwd: "/board-worktree", projectRoot: "/board", name: "Child", relation: { kind: "subagent" } };
 
-for (const mobile of [false, true]) {
-  for (const cwd of ["/board", "/other"]) {
-    test(`child card opens only the read-only panel (${mobile ? "mobile" : "desktop"}, chat in ${cwd})`, () => {
+test("a child's card opens the child's chat, never the read-only panel", () => {
+  for (const mobile of [false, true]) {
+    for (const cwd of ["/board", "/other"]) {
       const selected = { id: "selected", cwd };
+      const picked = [];
       const context = vm.createContext({
         sessionsForKanbanBoard,
         sessionsWithSelection: [selected, parent, child],
         boardProjectDir: "/board",
         selectedSession: selected,
-        activeCwd: cwd,
-        activeProjectKeyRef: { current: cwd },
-        centerView: "board",
-        agentTabs: [],
-        activeFileTabId: "file:/notes.md",
-        rightPanelOpen: false,
-        sidebarOpen: true,
-        isMobile: mobile,
         useMemo: (fn) => fn(),
         useCallback: (fn) => fn,
-        handleSelectSession: () => assert.fail("viewing a child must not select a chat"),
-        changeFileWorkspace: () => assert.fail("a workspace switch would drop the new viewer"),
-        fetch: () => assert.fail("opening a tab must not start/reopen/prompt an agent"),
+        handleSelectSession: (session) => picked.push(session.id),
+        handleOpenSubagentTab: () => assert.fail("a session link must not open the read-only panel"),
+        isMobile: mobile,
       });
-      for (const key of ["agentTabs", "activeFileTabId", "rightPanelOpen", "sidebarOpen"]) {
-        context[`set${key[0].toUpperCase()}${key.slice(1)}`] = (value) => {
-          context[key] = typeof value === "function" ? value(context[key]) : value;
-        };
-      }
       context.boardSessions = evaluate("boardSessions", context);
       assert.ok(context.boardSessions.includes(child), "the shell passes children to the board");
-      context.handleOpenSubagentTab = evaluate("handleOpenSubagentTab", context);
-      const open = evaluate("handleKanbanOpenSession", context);
-      open(child.id, "Old title");
-      open(child.id, "Old title");
-      assert.equal(context.agentTabs.length, 1, "reopening the viewer does not duplicate its tab");
-      assert.equal(context.agentTabs[0].label, "Child");
-      assert.equal(context.activeFileTabId, `agent:${child.id}`);
-      assert.equal(context.rightPanelOpen, true);
-      assert.equal(context.sidebarOpen, !mobile);
-      assert.equal(context.selectedSession, selected);
-      assert.equal(context.activeCwd, cwd);
-      assert.equal(context.activeProjectKeyRef.current, cwd);
-      assert.equal(context.centerView, "board");
-      assert.equal(evaluate("activeAgentTab", context)?.sessionId, child.id, "the viewer still resolves on the next render, even for another project's board");
-    });
+      evaluate("handleKanbanOpenSession", context)(child.id, "Old title");
+      assert.deepEqual(picked, [child.id], "the title argument is unused; the card's session wins");
+    }
   }
-}
+});
 
 test("a top-level card uses ordinary selection; missing and foreign ids do nothing", () => {
   const selected = [];
