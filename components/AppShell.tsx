@@ -1425,13 +1425,35 @@ export function AppShell() {
       : prev));
   }, []);
 
-  // Subagent work opens in a right-panel tab instead of hijacking the main chat.
+  // A subagent's read-only viewer, in a right-panel tab: the agent switcher's
+  // row button and a board card's session. The `Agent` card's link selects the
+  // child as the chat instead (`handleOpenSubagentChat`).
   const handleOpenSubagentTab = useCallback((sessionId: string, label: string) => {
     setAgentTabs((prev) => prev.some((tab) => tab.sessionId === sessionId) ? prev : [...prev, { sessionId, label }]);
     setActiveFileTabId(`agent:${sessionId}`);
     setRightPanelOpen(true);
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
+
+  // The `Agent` card's link to a child session: open that chat, the way the
+  // switcher's row does, rather than the read-only tab (which drops the child's
+  // own input and its live stream). Nothing is started here — selecting reads.
+  // A child missing from the catalogue (just persisted) is read by id and
+  // selected anyway; an unknown id changes nothing.
+  const handleOpenSubagentChat = useCallback((sessionId: string) => {
+    const known = sessionsWithSelection.find((session) => session.id === sessionId);
+    if (known) {
+      handleSelectSession(known);
+      return;
+    }
+    void fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { cache: "no-store" })
+      .then((res) => (res.ok ? (res.json() as Promise<{ info?: SessionInfo }>) : null))
+      .then((data) => {
+        const info = data?.info;
+        if (info?.id === sessionId) handleSelectSession(info);
+      })
+      .catch(() => {});
+  }, [handleSelectSession, sessionsWithSelection]);
 
   // The agent switcher's side-panel button: opens a subagent's tab, or closes
   // it when the open panel already has it (the panel closes with its last tab).
@@ -3137,7 +3159,7 @@ export function AppShell() {
               onContextUsageChange={handleContextUsageChange}
               onOpenFile={handleOpenLinkedFile}
               onFilesUploaded={handleExplorerRefresh}
-              onOpenSubagent={handleOpenSubagentTab}
+              onOpenSubagentChat={handleOpenSubagentChat}
               onAskInNewChat={handleAskInNewChat}
               quoteSelectionEnabled={quoteSelectionEnabled}
               initialPrompt={pendingQuotePrompt?.sessionId === selectedSession?.id ? pendingQuotePrompt?.text : undefined}

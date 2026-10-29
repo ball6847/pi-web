@@ -165,6 +165,7 @@ export const enLocale: LocalePlugin = {
     "agents.scope.workspace": "workspace",
     "agents.scope.project": "project",
     "agents.overridden": "Overridden",
+    "subagent.openChat": "Open the sub-agent's chat",
     "subagent.openTab": "View sub-agent work in side panel",
     "subagent.closeTab": "Close sub-agent side panel",
     "subagent.tabLabel": "Sub-agent {name}",

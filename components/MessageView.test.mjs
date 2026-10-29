@@ -314,7 +314,7 @@ test("a long or multi-line value stays inside the card", (t) => {
   assert.ok(textOf(html).includes("line 39"));
 });
 
-test("renders subagents as standard tool calls with only an extra side-panel button", () => {
+test("renders subagents as standard tool calls with an extra chat link", () => {
   const block = {
     type: "toolCall",
     toolCallId: "call-agent-1",
@@ -346,13 +346,14 @@ test("renders subagents as standard tool calls with only an extra side-panel but
     content: [block],
   }, {
     toolResults: new Map([[block.toolCallId, result]]),
-    onOpenSubagent() {},
+    onOpenSubagentChat() {},
   });
 
   assert.match(html, /border:1px solid rgba\(34,197,94,0\.25\)/);
   assert.match(html, />Agent</);
   assert.match(html, />Explore</);
-  assert.match(html, /aria-label="View sub-agent work in side panel"/);
+  // The link opens the child's chat (its own apostrophe is HTML-escaped in the attribute).
+  assert.match(html, /aria-label="Open the sub-agent/);
   assert.doesNotMatch(html, />completed</);
   assert.doesNotMatch(html, />Find parser</);
 
@@ -363,9 +364,9 @@ test("renders subagents as standard tool calls with only an extra side-panel but
     content: [{ ...block, toolCallId: "call-extension-1", toolName: "extension_tool" }],
   }, {
     toolResults: new Map(),
-    onOpenSubagent() {},
+    onOpenSubagentChat() {},
   });
-  assert.doesNotMatch(ordinaryHtml, /View sub-agent work in side panel/);
+  assert.doesNotMatch(ordinaryHtml, /Open the sub-agent/);
 });
 
 test("a tool card shows the run time pi recorded, else the timestamps' difference, never a tiny one", () => {
