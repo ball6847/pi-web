@@ -1386,7 +1386,13 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       const nativeEvent = e.nativeEvent;
-      const enterKey = e.key === "Enter" && !e.shiftKey;
+      // The right panel's full-width chord is the platform's primary modifier
+      // with Alt and Enter (the DeepSeek Harness spells it the same way), so
+      // it never sends. A plain Alt+Enter still does: it is the follow-up.
+      // A phone has no such chord (its panel is full-width already) and
+      // uses the primary modifier with Enter to send.
+      const isPanelFullscreenChord = !isMobile && e.altKey && (e.ctrlKey || e.metaKey);
+      const enterKey = e.key === "Enter" && !e.shiftKey && !isPanelFullscreenChord;
       const sendShortcut = isMobile || enterSendMode === "ctrlEnter"
         ? enterKey && (e.ctrlKey || e.metaKey)
         : enterKey;
