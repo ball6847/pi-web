@@ -1110,16 +1110,6 @@ export function AppShell() {
     }
   }, [activeCwd, changeFileWorkspace, invalidateWorkspaceRestore, isMobile, newSessionCwd, router, selectedSession]);
 
-  // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.). Esc stops the
-  // run only while the chat is the screen on show: the board view covers a
-  // still mounted ChatWindow, whose abort handler would otherwise stop the
-  // session running behind the board.
-  useGlobalKeyboardShortcuts({
-    onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
-    activeCwd,
-    escapeStopsAgent: centerView === "chat",
-  });
-
   // Client-built transient SessionInfo (new session / fork) lacks the
   // server-computed projectKey, which the same-project check in
   // handleCwdChange relies on. Hydrate it from the session list so switching
@@ -1138,6 +1128,39 @@ export function AppShell() {
       })
       .catch(() => {});
   }, []);
+
+  // The terminal lives as a tab of the right panel, so its toggle is the
+  // panel's: showing the terminal when another tab is on show, and closing
+  // the panel when the terminal is already the tab on show. The terminal's
+  // cwd is the sidebar's project (the one the sidebar's terminal button
+  // opens), falling back to the session's own.
+  const handleToggleTerminal = useCallback(() => {
+    const cwd = activeCwd ?? selectedSession?.cwd ?? newSessionCwd ?? null;
+    if (!cwd) return;
+    const existing = terminalTabs.find((tab) => tab.cwd === cwd);
+    if (existing && rightPanelOpen && activeFileTabId === existing.id) {
+      setRightPanelOpen(false);
+      return;
+    }
+    const tab = existing ?? newTerminalTab(cwd);
+    if (!existing) setTerminalTabs((tabs) => [...tabs, tab]);
+    setActiveFileTabId(tab.id);
+    setRightPanelOpen(true);
+    if (isMobile) setSidebarOpen(false);
+  }, [activeCwd, activeFileTabId, isMobile, newSessionCwd, rightPanelOpen, selectedSession?.cwd, terminalTabs]);
+
+  // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.). Esc stops the
+  // run only while the chat is the screen on show: the board view covers a
+  // still mounted ChatWindow, whose abort handler would otherwise stop the
+  // session running behind the board.
+  useGlobalKeyboardShortcuts({
+    onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
+    activeCwd,
+    escapeStopsAgent: centerView === "chat",
+    onToggleSidebar: handleSidebarToggle,
+    onToggleRightPanel: handleRightPanelToggle,
+    onToggleTerminal: handleToggleTerminal,
+  });
 
   // Called by ChatWindow when a new session gets its real id from pi
   const handleSessionCreated = useCallback((session: SessionInfo, sourceDraftKey: string, kanban?: KanbanAttachOutcome) => {
@@ -2676,7 +2699,7 @@ export function AppShell() {
         aria-controls="file-panel"
         aria-expanded={rightPanelOpen}
         aria-hidden={covered ? true : undefined}
-        title={rightPanelOpen ? translate("files.hidePanel") : translate("files.showPanel")}
+        title={`${rightPanelOpen ? translate("files.hidePanel") : translate("files.showPanel")} (${translate("shortcut.toggleRightPanel")})`}
         aria-label={rightPanelOpen ? translate("files.hidePanel") : translate("files.showPanel")}
         data-mobile-toolbar-file={mobile ? "true" : undefined}
         style={{
@@ -2849,7 +2872,7 @@ export function AppShell() {
         <div style={{ display: "flex", alignItems: "center", position: "relative", borderBottom: "1px solid var(--border)", height: "calc(36px + env(safe-area-inset-top))", paddingTop: "env(safe-area-inset-top)" }}>
           <button
             onClick={handleSidebarToggle}
-             title={sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")}
+             title={`${sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")} (${translate("shortcut.toggleSidebar")})`}
              aria-label={sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")}
             style={{
               display: "flex", alignItems: "center", justifyContent: "center",
