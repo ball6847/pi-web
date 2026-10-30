@@ -2741,7 +2741,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     <ToolbarIconButton
       onClick={() => { if (explorerCwd) onOpenTerminal?.(explorerCwd); }}
       disabled={!explorerCwd || !onOpenTerminal}
-      title={t("terminal.open")}
+      title={`${t("terminal.open")} (${t("shortcut.toggleTerminal")})`}
     >
       <TerminalIcon size={keyIconSize} />
     </ToolbarIconButton>

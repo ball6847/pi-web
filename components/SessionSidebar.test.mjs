@@ -143,7 +143,7 @@ test("on a desktop the files sit below the sessions by default, both in view", (
   // picker's one row and the tree. No row of keys under the picker; nothing
   // changed, so no count after the label.
   const filesPanel = html.slice(html.indexOf(files) + files.length);
-  assert.match(filesPanel, /^<div class="sidebar-files-section"><button type="button" class="sidebar-files-section-toggle" aria-expanded="true" aria-controls="session-sidebar-files-body"><svg width="12" height="12"[^>]*stroke-width="3"[^>]*class="session-tree-chevron is-open"[^>]*>[\s\S]*?<\/svg><span class="sidebar-files-section-label">Files<\/span><\/button><div class="sidebar-files-keys" role="group" aria-label="File actions"><button type="button" title="Open workspace terminal" aria-label="Open workspace terminal" class="sidebar-tool-button">/);
+  assert.match(filesPanel, /^<div class="sidebar-files-section"><button type="button" class="sidebar-files-section-toggle" aria-expanded="true" aria-controls="session-sidebar-files-body"><svg width="12" height="12"[^>]*stroke-width="3"[^>]*class="session-tree-chevron is-open"[^>]*>[\s\S]*?<\/svg><span class="sidebar-files-section-label">Files<\/span><\/button><div class="sidebar-files-keys" role="group" aria-label="File actions"><button type="button" title="Open workspace terminal \(Ctrl\+`\)" aria-label="Open workspace terminal \(Ctrl\+`\)" class="sidebar-tool-button">/);
   assert.match(filesPanel, /<div id="session-sidebar-files-body" class="sidebar-files-body"><div class="sidebar-files-head"><div class="project-picker is-row" role="group"/);
   assert.match(filesPanel, /<div class="sidebar-files-scroll scrollbar-subtle">/);
   assert.doesNotMatch(filesPanel, /sidebar-files-toolbar|sidebar-files-title|sidebar-files-actions|sidebar-files-section-search|sidebar-files-changes/);
@@ -223,7 +223,7 @@ test("below the sessions the section's header row holds the files' keys in the f
   // not a toggle. Seven keys always there, so none ever moves.
   assert.match(keys, /^<div class="sidebar-files-keys" role="group" aria-label="File actions">/);
   assert.deepEqual(keyLabels(keys), [
-    "Open workspace terminal",
+    "Open workspace terminal (Ctrl+`)",
     "Open in file manager",
     "Upload files to project root",
     "Refresh file list",
@@ -243,7 +243,7 @@ test("below the sessions the section's header row holds the files' keys in the f
   // Without a folder they wait, disabled, in the same places; so does the
   // terminal without a handler, where the files tab leaves it out.
   assert.deepEqual(keyLabels(sectionKeys(render())), [
-    "Open workspace terminal (disabled)",
+    "Open workspace terminal (Ctrl+`) (disabled)",
     "Open in file manager (disabled)",
     "Upload files to project root (disabled)",
     "Refresh file list (disabled)",
@@ -252,7 +252,7 @@ test("below the sessions the section's header row holds the files' keys in the f
     "Search files (disabled) expanded=false",
   ]);
   assert.deepEqual(keyLabels(sectionKeys(render({ selectedCwd: "/work/alpha" }))).slice(0, 3), [
-    "Open workspace terminal (disabled)",
+    "Open workspace terminal (Ctrl+`) (disabled)",
     "Open in file manager",
     "Upload files to project root",
   ]);
