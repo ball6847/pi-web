@@ -103,22 +103,26 @@ function isBackquote(event: PanelShortcutEvent): boolean {
 }
 
 /**
- * `Cmd+B` / `Ctrl+B`: toggle the sidebar.
+ * `Cmd+B` on macOS, `Ctrl+B` on Windows and Linux: toggle the sidebar.
  *
- * `Cmd` (macOS) and `Ctrl` (Windows, Linux) are both accepted on every
- * platform, so the shortcut works with the keyboard at hand. `Alt` is refused:
- * Windows reports AltGr as Ctrl+Alt, and an AltGr combination that types a
- * character is the user's text. `Shift` is refused too, because `Cmd+Shift+B`
- * is the right panel.
+ * The modifier is the platform's *primary* one — `Cmd` on macOS, `Ctrl`
+ * elsewhere — the way the DeepSeek Harness spells it (`primary`, resolved per
+ * platform profile). Only that one counts: on macOS `Ctrl+B` is the caret's
+ * "back one character" in a text field, and the Windows key is not a
+ * shortcut modifier at all.
+ *
+ * `Alt` is refused: Windows reports AltGr as Ctrl+Alt, and an AltGr
+ * combination that types a character is the user's text. `Shift` is refused
+ * too, because the primary modifier with `Shift` is the right panel.
  */
-export function isSidebarToggleShortcut(event: PanelShortcutEvent): boolean {
+export function isSidebarToggleShortcut(event: PanelShortcutEvent, isMac: boolean): boolean {
   if (event.altKey || event.shiftKey) return false;
-  if (!event.metaKey && !event.ctrlKey) return false;
+  if (!hasPrimaryModifier(event, isMac)) return false;
   return isLetterB(event);
 }
 
 /**
- * `Cmd+Shift+B` / `Ctrl+Shift+B`: toggle the right panel.
+ * `Cmd+Shift+B` on macOS, `Ctrl+Shift+B` elsewhere: toggle the right panel.
  *
  * Chrome binds `Cmd+Shift+B` to its bookmarks bar and Firefox `Ctrl+Shift+B`
  * to its bookmarks toolbar, but neither is a reserved accelerator: the page
@@ -127,23 +131,47 @@ export function isSidebarToggleShortcut(event: PanelShortcutEvent): boolean {
  * Windows reports AltGr as Ctrl+Alt and an AltGr combination that types a
  * character is the user's text.
  */
-export function isRightPanelToggleShortcut(event: PanelShortcutEvent): boolean {
+export function isRightPanelToggleShortcut(event: PanelShortcutEvent, isMac: boolean): boolean {
   if (event.altKey || !event.shiftKey) return false;
-  if (!event.metaKey && !event.ctrlKey) return false;
+  if (!hasPrimaryModifier(event, isMac)) return false;
   return isLetterB(event);
+}
+
+/**
+ * `Cmd+Alt+Enter` on macOS, `Ctrl+Alt+Enter` elsewhere: the right panel's
+ * full-width mode.
+ *
+ * The DeepSeek Harness toggles its right pane's fullscreen with the primary
+ * modifier, `Alt` and `Enter` (its `pane.fullscreen.toggle`). The `Alt` is
+ * what makes the chord safe: a bare `Enter` belongs to the composer (send),
+ * and the harness reserves `Enter` without `Alt` for exactly that reason.
+ */
+export function isRightPanelFullscreenShortcut(event: PanelShortcutEvent, isMac: boolean): boolean {
+  if (!event.altKey || event.shiftKey) return false;
+  if (!hasPrimaryModifier(event, isMac)) return false;
+  return event.key === "Enter";
 }
 
 /**
  * `Ctrl+` `` ` ``: toggle the terminal.
  *
  * `Ctrl` on every platform, `Cmd` included on macOS only as `Cmd+`` is the
- * system's window switcher there. `Shift` is refused, because `Ctrl+Shift+``
+ * system's window switcher there — and the Harness spells this one `control`
+ * rather than `primary` too. `Shift` is refused, because `Ctrl+Shift+``
  * is the "new terminal" chord in other editors.
  */
 export function isTerminalToggleShortcut(event: PanelShortcutEvent): boolean {
   if (event.altKey || event.shiftKey || event.metaKey) return false;
   if (!event.ctrlKey) return false;
   return isBackquote(event);
+}
+
+/**
+ * Whether the event carries the platform's primary modifier: `Cmd` on macOS,
+ * `Ctrl` on Windows and Linux.
+ */
+function hasPrimaryModifier(event: PanelShortcutEvent, isMac: boolean): boolean {
+  return isMac ? event.metaKey : event.ctrlKey;
 }
 
 /**
@@ -172,6 +200,14 @@ interface UseGlobalKeyboardShortcutsOptions {
   onToggleRightPanel?: () => void;
   /** Called when the terminal toggle chord is pressed. */
   onToggleTerminal?: () => void;
+  /** Called when the right panel's full-width chord is pressed. */
+  onToggleRightPanelFullscreen?: () => void;
+  /**
+   * Whether the platform's primary modifier is `Cmd` (macOS) rather than
+   * `Ctrl` (Windows, Linux). The platform toggles follow it, so a chord
+   * written once reads as `Cmd+B` on a Mac and `Ctrl+B` elsewhere.
+   */
+  isMac?: boolean;
   /** The currently selected project directory (sidebar cwd). */
   activeCwd?: string | null;
   /**
@@ -190,8 +226,9 @@ interface UseGlobalKeyboardShortcutsOptions {
  *   Esc          – stop the running agent (via module-level abort handler)
  *   Ctrl+Alt+N   – create a new session in the active project directory
  *                  (see `isNewSessionShortcut()` for macOS and AltGr)
- *   Cmd/Ctrl+B   – toggle the sidebar
- *   Cmd/Ctrl+Shift+B (or Ctrl+Alt+B) – toggle the right panel
+ *   Cmd/Ctrl+B   – toggle the sidebar (the platform's primary modifier)
+ *   Cmd/Ctrl+Shift+B – toggle the right panel
+ *   Cmd/Ctrl+Alt+Enter – the right panel's full-width mode
  *   Ctrl+`       – toggle the terminal
  *
  * Note: Esc inside <textarea> or <input> is deliberately NOT handled here.
@@ -210,6 +247,8 @@ export function useGlobalKeyboardShortcuts(
     onToggleSidebar,
     onToggleRightPanel,
     onToggleTerminal,
+    onToggleRightPanelFullscreen,
+    isMac = false,
   } = options;
 
   useEffect(() => {
@@ -238,14 +277,21 @@ export function useGlobalKeyboardShortcuts(
         onToggleTerminal();
         return;
       }
-      if (isRightPanelToggleShortcut(e)) {
+      if (isRightPanelFullscreenShortcut(e, isMac)) {
+        if (!onToggleRightPanelFullscreen) return;
+        if (isInsideModal(e)) return;
+        e.preventDefault();
+        onToggleRightPanelFullscreen();
+        return;
+      }
+      if (isRightPanelToggleShortcut(e, isMac)) {
         if (!onToggleRightPanel) return;
         if (isInsideModal(e)) return;
         e.preventDefault();
         onToggleRightPanel();
         return;
       }
-      if (isSidebarToggleShortcut(e)) {
+      if (isSidebarToggleShortcut(e, isMac)) {
         if (!onToggleSidebar) return;
         if (isInsideModal(e)) return;
         e.preventDefault();
@@ -255,5 +301,5 @@ export function useGlobalKeyboardShortcuts(
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeCwd, escapeStopsAgent, onNewSession, onToggleRightPanel, onToggleSidebar, onToggleTerminal]);
+  }, [activeCwd, escapeStopsAgent, isMac, onNewSession, onToggleRightPanel, onToggleRightPanelFullscreen, onToggleSidebar, onToggleTerminal]);
 }

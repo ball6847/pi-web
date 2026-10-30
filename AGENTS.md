@@ -184,6 +184,7 @@ lib/
   jsonc.ts                  JSON with comments and trailing commas (models.json is read through it)
   shell-words.ts            split a pasted command line into words without a shell; refuses | && ; redirects $(…)
   key-serializer.ts         serializeByKey(): one globalThis promise chain per key
+  keyboard-platform.ts      the platform's primary modifier (Cmd on macOS, Ctrl elsewhere) and its label
   stacked-dialog.ts         Escape and focus handling for Settings and dialogs stacked above it
   project-trust.ts          project trust status and decisions; fresh-folder trust-and-write
   mcp-host.ts               per-session MCP host: registers mcp.json servers before prompts, reports status
@@ -261,11 +262,13 @@ hooks/
   useKanbanCardDrag.ts     dragging a kanban card to another lane: the same pointer state machine, rect hit-test, undroppable marking, as-is ghost
   useKanbanLaneDrag.ts     dragging a kanban lane to a new position: board columns (axis x) and config-dialog rows (axis y), accent drop line, ghost, the fixed backlog excepted
   useIsMobile.ts           responsive breakpoint
+  usePrimaryModifier.ts    the platform's primary modifier for the shortcut labels
   usePageHidden.ts         HIDDEN_PAGE_GRACE_MS; true once the page has been hidden that long (file watches pause)
   useSessionUiState.ts     sidebar pins, archive, project order: optimistic writes in order, refetch on revision change
   useSidebarMotion.ts      the sidebar's fold and archive-view motion: phase, end fallback, reduced motion, what shows meanwhile
   useKeyboardShortcuts.ts  Esc stops the running agent unless a field or nearer handler took it; Ctrl+Alt+N;
-                           the panel toggles (Cmd/Ctrl+B sidebar, Cmd/Ctrl+Shift+B right panel, Ctrl+` terminal)
+                           the panel toggles (Cmd/Ctrl+B sidebar, Cmd/Ctrl+Shift+B right panel,
+                           Cmd/Ctrl+Alt+Enter full width, Ctrl+` terminal)
   useResizablePanel.ts     drag/keyboard panel size kept per key; persistClamp: false never saves a short window's clamp
   usePrismLanguages.ts     true once the Prism languages are loaded; starts the load for a highlighter
   useTheme.ts              theme state
