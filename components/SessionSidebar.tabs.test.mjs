@@ -79,7 +79,7 @@ test("the files tab's keys: the folder's four, then the tree's two views, always
   // The changes view is there without changes too, disabled, and its count
   // is the tab's.
   assert.deepEqual(keyLabels(row), [
-    "Open workspace terminal",
+    "Open workspace terminal (Ctrl+`)",
     "Open in file manager",
     "Upload files to project root",
     "Refresh file list",

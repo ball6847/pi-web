@@ -8,9 +8,15 @@ import { createJiti } from "jiti";
 const shimPath = fileURLToPath(new URL("./__fixtures__/react-hook-shim.mjs", import.meta.url));
 const jiti = createJiti(import.meta.url, { tsconfigPaths: true, alias: { react: shimPath } });
 const { renderHook } = await import(shimPath);
-const { handleGlobalEscape, isNewSessionShortcut, registerAbortHandler, useGlobalKeyboardShortcuts } = await jiti.import(
-  "./useKeyboardShortcuts.ts",
-);
+const {
+  handleGlobalEscape,
+  isNewSessionShortcut,
+  isRightPanelToggleShortcut,
+  isSidebarToggleShortcut,
+  isTerminalToggleShortcut,
+  registerAbortHandler,
+  useGlobalKeyboardShortcuts,
+} = await jiti.import("./useKeyboardShortcuts.ts");
 
 function keydown(key, { tagName = "BUTTON", defaultPrevented = false } = {}) {
   return {
@@ -141,4 +147,106 @@ test("a KeyboardEvent without a code still matches by key", () => {
   assert.equal(isNewSessionShortcut({ key: "Dead", code: null, ctrlKey: true, altKey: true }), false);
   assert.equal(shortcut({ key: "n", code: "" }), true);
   assert.equal(shortcut({ key: "Dead", code: "" }), false);
+});
+
+// ---------------------------------------------------------------------------
+// Panel toggles: sidebar, right panel, terminal
+// ---------------------------------------------------------------------------
+
+function panelEvent({ key = "b", code = "KeyB", ctrlKey = false, metaKey = false, altKey = false, shiftKey = false } = {}) {
+  return {
+    key, code, ctrlKey, metaKey, altKey, shiftKey,
+    defaultPrevented: false,
+    preventDefault() { this.defaultPrevented = true; },
+  };
+}
+
+test("Cmd/Ctrl+B toggles the sidebar, the Shift variant the right panel", () => {
+  assert.equal(isSidebarToggleShortcut(panelEvent({ metaKey: true })), true);
+  assert.equal(isSidebarToggleShortcut(panelEvent({ ctrlKey: true })), true);
+  assert.equal(isSidebarToggleShortcut(panelEvent({ key: "B", shiftKey: true })), false);
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ metaKey: true, shiftKey: true })), true);
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ ctrlKey: true, shiftKey: true })), true);
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ ctrlKey: true })), false);
+});
+
+test("the right panel's chord never carries Alt (AltGr types the user's text)", () => {
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ ctrlKey: true, altKey: true, shiftKey: true })), false);
+  // The sidebar's chord never carries Alt either.
+  assert.equal(isSidebarToggleShortcut(panelEvent({ ctrlKey: true, altKey: true })), false);
+});
+
+test("the sidebar and the right panel need a modifier", () => {
+  assert.equal(isSidebarToggleShortcut(panelEvent()), false);
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ shiftKey: true })), false);
+  assert.equal(isSidebarToggleShortcut(panelEvent({ ctrlKey: true, shiftKey: true })), false);
+});
+
+test("a dead key is matched by its physical key", () => {
+  assert.equal(isSidebarToggleShortcut(panelEvent({ key: "Dead", metaKey: true })), true);
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ key: "Dead", metaKey: true, shiftKey: true })), true);
+  // Another letter's dead key is not the shortcut.
+  assert.equal(isSidebarToggleShortcut(panelEvent({ key: "Dead", code: "KeyM", metaKey: true })), false);
+});
+
+test("Ctrl+` toggles the terminal", () => {
+  const backquote = { key: "`", code: "Backquote" };
+  assert.equal(isTerminalToggleShortcut({ ...backquote, ctrlKey: true }), true);
+  // The physical key decides: a layout whose backquote types a dead key.
+  assert.equal(isTerminalToggleShortcut({ key: "Dead", code: "Backquote", ctrlKey: true }), true);
+  // A KeyboardEvent without a code still matches by the character.
+  assert.equal(isTerminalToggleShortcut({ key: "`", code: null, ctrlKey: true }), true);
+  // Cmd+` is the system's window switcher, and Shift+` is another chord.
+  assert.equal(isTerminalToggleShortcut({ ...backquote, metaKey: true }), false);
+  assert.equal(isTerminalToggleShortcut({ key: "~", code: "Backquote", ctrlKey: true, shiftKey: true }), false);
+  assert.equal(isTerminalToggleShortcut({ ...backquote, ctrlKey: true, altKey: true }), false);
+  assert.equal(isTerminalToggleShortcut({ ...backquote }), false);
+});
+
+test("the hook routes each toggle to its own callback", () => {
+  const target = emitter();
+  globalThis.window = target;
+  const calls = { sidebar: 0, right: 0, terminal: 0 };
+  const hook = renderHook((props) => useGlobalKeyboardShortcuts(props), {
+    onToggleSidebar: () => { calls.sidebar += 1; },
+    onToggleRightPanel: () => { calls.right += 1; },
+    onToggleTerminal: () => { calls.terminal += 1; },
+  });
+
+  target.emit("keydown", panelEvent({ metaKey: true }));
+  assert.equal(calls.sidebar, 1);
+  assert.equal(calls.right, 0);
+
+  target.emit("keydown", panelEvent({ metaKey: true, shiftKey: true }));
+  assert.equal(calls.right, 1);
+
+  target.emit("keydown", panelEvent({ key: "`", code: "Backquote", ctrlKey: true }));
+  assert.equal(calls.terminal, 1);
+
+  hook.unmount();
+  delete globalThis.window;
+});
+
+test("a toggle inside a modal does not move the panels behind it", () => {
+  const target = emitter();
+  globalThis.window = target;
+  let sidebar = 0;
+  const hook = renderHook((props) => useGlobalKeyboardShortcuts(props), {
+    onToggleSidebar: () => { sidebar += 1; },
+  });
+
+  const modalTarget = { closest: (selector) => (selector === "[aria-modal='true']" ? {} : null) };
+  const event = panelEvent({ metaKey: true });
+  event.target = modalTarget;
+  target.emit("keydown", event);
+  assert.equal(sidebar, 0);
+
+  // The same key outside a modal toggles the sidebar.
+  const outside = panelEvent({ metaKey: true });
+  outside.target = { closest: () => null };
+  target.emit("keydown", outside);
+  assert.equal(sidebar, 1);
+
+  hook.unmount();
+  delete globalThis.window;
 });

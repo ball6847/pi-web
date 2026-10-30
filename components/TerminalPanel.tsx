@@ -7,6 +7,11 @@ import { terminalFontSize, useChatAppearance } from "@/hooks/useChatAppearance";
 import { useI18n } from "@/hooks/useI18n";
 import { setTerminalTheme, useTerminalTheme } from "@/hooks/useTerminalTheme";
 import { subscribeFontPreferences } from "@/hooks/useFontPreferences";
+import {
+  isRightPanelToggleShortcut,
+  isSidebarToggleShortcut,
+  isTerminalToggleShortcut,
+} from "@/hooks/useKeyboardShortcuts";
 import { readFontWeight } from "@/lib/font-preferences";
 import { createTerminalWriter, terminalRequest } from "@/lib/terminal-client";
 import { pageId, trackEventSource } from "@/lib/page-debug";
@@ -115,6 +120,11 @@ export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError }
       const key = event.key.toLowerCase();
       if ((event.ctrlKey || event.metaKey) && key === "v") return false;
       if ((event.ctrlKey || event.metaKey) && key === "c" && terminal.hasSelection()) return false;
+      // The panel toggles are ours, not the shell's: the global handler acts
+      // on them, so xterm must not send them to the PTY.
+      if (isSidebarToggleShortcut(event) || isRightPanelToggleShortcut(event) || isTerminalToggleShortcut(event)) {
+        return false;
+      }
       return true;
     });
 

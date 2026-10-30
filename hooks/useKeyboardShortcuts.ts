@@ -62,12 +62,116 @@ export function isNewSessionShortcut(event: {
 }
 
 // ---------------------------------------------------------------------------
+// Panel toggles: sidebar, right panel, terminal
+// ---------------------------------------------------------------------------
+
+/** The parts of a keydown the panel toggles decide on. */
+export interface PanelShortcutEvent {
+  key: string;
+  code?: string | null;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}
+
+/**
+ * Whether the key is the letter `b`, whatever the layout says.
+ *
+ * The letter decides (`event.key`), so the shortcut follows the keyboard: a
+ * Dvorak user presses the key that types `b`. The physical key (`code`) is the
+ * fallback for the layouts that report a dead key (macOS `Option`+letter), as
+ * `isNewSessionShortcut()` does for `Ctrl+Alt+N`. `code` alone is never
+ * enough: Windows reports AltGr as Ctrl+Alt, and a character that combination
+ * types is the user's text, not the shortcut.
+ */
+function isLetterB(event: PanelShortcutEvent): boolean {
+  if (event.key.toLowerCase() === "b") return true;
+  return event.key === "Dead" && event.code === "KeyB";
+}
+
+/**
+ * Whether the key is the backquote (`code === "Backquote"`).
+ *
+ * The physical key decides, because the character it types differs per
+ * layout (and a German layout types a dead key there). The character is the
+ * fallback for a `KeyboardEvent` without a `code`.
+ */
+function isBackquote(event: PanelShortcutEvent): boolean {
+  if (event.code) return event.code === "Backquote";
+  return event.key === "`" || event.key === "˜";
+}
+
+/**
+ * `Cmd+B` / `Ctrl+B`: toggle the sidebar.
+ *
+ * `Cmd` (macOS) and `Ctrl` (Windows, Linux) are both accepted on every
+ * platform, so the shortcut works with the keyboard at hand. `Alt` is refused:
+ * Windows reports AltGr as Ctrl+Alt, and an AltGr combination that types a
+ * character is the user's text. `Shift` is refused too, because `Cmd+Shift+B`
+ * is the right panel.
+ */
+export function isSidebarToggleShortcut(event: PanelShortcutEvent): boolean {
+  if (event.altKey || event.shiftKey) return false;
+  if (!event.metaKey && !event.ctrlKey) return false;
+  return isLetterB(event);
+}
+
+/**
+ * `Cmd+Shift+B` / `Ctrl+Shift+B`: toggle the right panel.
+ *
+ * Chrome binds `Cmd+Shift+B` to its bookmarks bar and Firefox `Ctrl+Shift+B`
+ * to its bookmarks toolbar, but neither is a reserved accelerator: the page
+ * sees the key first and its `preventDefault()` stops the browser's own
+ * action (the way Google Docs overrides `Cmd+S`). `Alt` is refused, because
+ * Windows reports AltGr as Ctrl+Alt and an AltGr combination that types a
+ * character is the user's text.
+ */
+export function isRightPanelToggleShortcut(event: PanelShortcutEvent): boolean {
+  if (event.altKey || !event.shiftKey) return false;
+  if (!event.metaKey && !event.ctrlKey) return false;
+  return isLetterB(event);
+}
+
+/**
+ * `Ctrl+` `` ` ``: toggle the terminal.
+ *
+ * `Ctrl` on every platform, `Cmd` included on macOS only as `Cmd+`` is the
+ * system's window switcher there. `Shift` is refused, because `Ctrl+Shift+``
+ * is the "new terminal" chord in other editors.
+ */
+export function isTerminalToggleShortcut(event: PanelShortcutEvent): boolean {
+  if (event.altKey || event.shiftKey || event.metaKey) return false;
+  if (!event.ctrlKey) return false;
+  return isBackquote(event);
+}
+
+/**
+ * Whether the key was pressed inside a dialog that covers the page.
+ *
+ * A modal (Settings, the trust dialog, a card editor) owns the screen: the
+ * panels behind it are not what the user is looking at, so a panel toggle
+ * would change something they cannot see.
+ */
+function isInsideModal(event: KeyboardEvent): boolean {
+  const target = event.target as HTMLElement | null;
+  if (!target || typeof target.closest !== "function") return false;
+  return target.closest("[aria-modal='true']") !== null;
+}
+
+// ---------------------------------------------------------------------------
 // Hook: global keyboard shortcuts
 // ---------------------------------------------------------------------------
 
 interface UseGlobalKeyboardShortcutsOptions {
   /** Called when Ctrl+Alt+N is pressed. Receives current cwd. */
   onNewSession?: (cwd: string) => void;
+  /** Called when the sidebar toggle chord is pressed. */
+  onToggleSidebar?: () => void;
+  /** Called when the right panel toggle chord is pressed. */
+  onToggleRightPanel?: () => void;
+  /** Called when the terminal toggle chord is pressed. */
+  onToggleTerminal?: () => void;
   /** The currently selected project directory (sidebar cwd). */
   activeCwd?: string | null;
   /**
@@ -86,6 +190,9 @@ interface UseGlobalKeyboardShortcutsOptions {
  *   Esc          – stop the running agent (via module-level abort handler)
  *   Ctrl+Alt+N   – create a new session in the active project directory
  *                  (see `isNewSessionShortcut()` for macOS and AltGr)
+ *   Cmd/Ctrl+B   – toggle the sidebar
+ *   Cmd/Ctrl+Shift+B (or Ctrl+Alt+B) – toggle the right panel
+ *   Ctrl+`       – toggle the terminal
  *
  * Note: Esc inside <textarea> or <input> is deliberately NOT handled here.
  * ChatInput manages its own Esc logic (closing slash / @ file menus, stopping
@@ -96,7 +203,14 @@ interface UseGlobalKeyboardShortcutsOptions {
 export function useGlobalKeyboardShortcuts(
   options: UseGlobalKeyboardShortcutsOptions,
 ): void {
-  const { onNewSession, activeCwd, escapeStopsAgent = true } = options;
+  const {
+    onNewSession,
+    activeCwd,
+    escapeStopsAgent = true,
+    onToggleSidebar,
+    onToggleRightPanel,
+    onToggleTerminal,
+  } = options;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -111,10 +225,35 @@ export function useGlobalKeyboardShortcuts(
         if (!activeCwd || !onNewSession) return;
         e.preventDefault();
         onNewSession(activeCwd);
+        return;
+      }
+
+      // ---- Panel toggles: sidebar, right panel, terminal ----
+      // The terminal is checked first: it is the only chord that carries no
+      // letter, so it cannot be mistaken for the other two.
+      if (isTerminalToggleShortcut(e)) {
+        if (!onToggleTerminal) return;
+        if (isInsideModal(e)) return;
+        e.preventDefault();
+        onToggleTerminal();
+        return;
+      }
+      if (isRightPanelToggleShortcut(e)) {
+        if (!onToggleRightPanel) return;
+        if (isInsideModal(e)) return;
+        e.preventDefault();
+        onToggleRightPanel();
+        return;
+      }
+      if (isSidebarToggleShortcut(e)) {
+        if (!onToggleSidebar) return;
+        if (isInsideModal(e)) return;
+        e.preventDefault();
+        onToggleSidebar();
       }
     };
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeCwd, escapeStopsAgent, onNewSession]);
+  }, [activeCwd, escapeStopsAgent, onNewSession, onToggleRightPanel, onToggleSidebar, onToggleTerminal]);
 }
