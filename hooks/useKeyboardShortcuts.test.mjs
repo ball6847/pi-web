@@ -10,7 +10,10 @@ const jiti = createJiti(import.meta.url, { tsconfigPaths: true, alias: { react: 
 const { renderHook } = await import(shimPath);
 const {
   handleGlobalEscape,
+  isCloseTabShortcut,
   isNewSessionShortcut,
+  isPanelTabNavigationShortcut,
+  isRightPanelFullscreenShortcut,
   isRightPanelToggleShortcut,
   isSidebarToggleShortcut,
   isTerminalToggleShortcut,
@@ -162,31 +165,54 @@ function panelEvent({ key = "b", code = "KeyB", ctrlKey = false, metaKey = false
 }
 
 test("Cmd/Ctrl+B toggles the sidebar, the Shift variant the right panel", () => {
-  assert.equal(isSidebarToggleShortcut(panelEvent({ metaKey: true })), true);
-  assert.equal(isSidebarToggleShortcut(panelEvent({ ctrlKey: true })), true);
-  assert.equal(isSidebarToggleShortcut(panelEvent({ key: "B", shiftKey: true })), false);
-  assert.equal(isRightPanelToggleShortcut(panelEvent({ metaKey: true, shiftKey: true })), true);
-  assert.equal(isRightPanelToggleShortcut(panelEvent({ ctrlKey: true, shiftKey: true })), true);
-  assert.equal(isRightPanelToggleShortcut(panelEvent({ ctrlKey: true })), false);
+  assert.equal(isSidebarToggleShortcut(panelEvent({ metaKey: true }), true), true);
+  assert.equal(isSidebarToggleShortcut(panelEvent({ key: "B", shiftKey: true }), true), false);
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ metaKey: true, shiftKey: true }), true), true);
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ metaKey: true }), true), false);
+});
+
+test("the modifier is the platform's primary one: Cmd on macOS, Ctrl elsewhere", () => {
+  // macOS: the primary modifier is Cmd, and only Cmd.
+  assert.equal(isSidebarToggleShortcut(panelEvent({ metaKey: true }), true), true);
+  assert.equal(isSidebarToggleShortcut(panelEvent({ ctrlKey: true }), true), false);
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ metaKey: true, shiftKey: true }), true), true);
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ ctrlKey: true, shiftKey: true }), true), false);
+  // Windows and Linux: the primary modifier is Ctrl, and only Ctrl.
+  assert.equal(isSidebarToggleShortcut(panelEvent({ ctrlKey: true }), false), true);
+  assert.equal(isSidebarToggleShortcut(panelEvent({ metaKey: true }), false), false);
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ ctrlKey: true, shiftKey: true }), false), true);
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ metaKey: true, shiftKey: true }), false), false);
+});
+
+test("Cmd/Ctrl+Alt+Enter is the right panel's full-width mode", () => {
+  const enter = { key: "Enter", code: "Enter" };
+  assert.equal(isRightPanelFullscreenShortcut({ ...enter, metaKey: true, altKey: true }, true), true);
+  assert.equal(isRightPanelFullscreenShortcut({ ...enter, ctrlKey: true, altKey: true }, false), true);
+  // A bare Enter belongs to the composer, and the other modifier is not the
+  // platform's primary one.
+  assert.equal(isRightPanelFullscreenShortcut({ ...enter, metaKey: true, altKey: true }, false), false);
+  assert.equal(isRightPanelFullscreenShortcut({ ...enter, ctrlKey: true, altKey: true }, true), false);
+  assert.equal(isRightPanelFullscreenShortcut({ ...enter, metaKey: true }, true), false);
+  assert.equal(isRightPanelFullscreenShortcut({ ...enter, metaKey: true, altKey: true, shiftKey: true }, true), false);
 });
 
 test("the right panel's chord never carries Alt (AltGr types the user's text)", () => {
-  assert.equal(isRightPanelToggleShortcut(panelEvent({ ctrlKey: true, altKey: true, shiftKey: true })), false);
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ ctrlKey: true, altKey: true, shiftKey: true }), false), false);
   // The sidebar's chord never carries Alt either.
-  assert.equal(isSidebarToggleShortcut(panelEvent({ ctrlKey: true, altKey: true })), false);
+  assert.equal(isSidebarToggleShortcut(panelEvent({ ctrlKey: true, altKey: true }), false), false);
 });
 
 test("the sidebar and the right panel need a modifier", () => {
-  assert.equal(isSidebarToggleShortcut(panelEvent()), false);
-  assert.equal(isRightPanelToggleShortcut(panelEvent({ shiftKey: true })), false);
-  assert.equal(isSidebarToggleShortcut(panelEvent({ ctrlKey: true, shiftKey: true })), false);
+  assert.equal(isSidebarToggleShortcut(panelEvent(), true), false);
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ shiftKey: true }), true), false);
+  assert.equal(isSidebarToggleShortcut(panelEvent({ ctrlKey: true, shiftKey: true }), true), false);
 });
 
 test("a dead key is matched by its physical key", () => {
-  assert.equal(isSidebarToggleShortcut(panelEvent({ key: "Dead", metaKey: true })), true);
-  assert.equal(isRightPanelToggleShortcut(panelEvent({ key: "Dead", metaKey: true, shiftKey: true })), true);
+  assert.equal(isSidebarToggleShortcut(panelEvent({ key: "Dead", metaKey: true }), true), true);
+  assert.equal(isRightPanelToggleShortcut(panelEvent({ key: "Dead", metaKey: true, shiftKey: true }), true), true);
   // Another letter's dead key is not the shortcut.
-  assert.equal(isSidebarToggleShortcut(panelEvent({ key: "Dead", code: "KeyM", metaKey: true })), false);
+  assert.equal(isSidebarToggleShortcut(panelEvent({ key: "Dead", code: "KeyM", metaKey: true }), true), false);
 });
 
 test("Ctrl+` toggles the terminal", () => {
@@ -206,11 +232,13 @@ test("Ctrl+` toggles the terminal", () => {
 test("the hook routes each toggle to its own callback", () => {
   const target = emitter();
   globalThis.window = target;
-  const calls = { sidebar: 0, right: 0, terminal: 0 };
+  const calls = { sidebar: 0, right: 0, terminal: 0, fullscreen: 0 };
   const hook = renderHook((props) => useGlobalKeyboardShortcuts(props), {
     onToggleSidebar: () => { calls.sidebar += 1; },
     onToggleRightPanel: () => { calls.right += 1; },
     onToggleTerminal: () => { calls.terminal += 1; },
+    onToggleRightPanelFullscreen: () => { calls.fullscreen += 1; },
+    isMac: true,
   });
 
   target.emit("keydown", panelEvent({ metaKey: true }));
@@ -223,6 +251,28 @@ test("the hook routes each toggle to its own callback", () => {
   target.emit("keydown", panelEvent({ key: "`", code: "Backquote", ctrlKey: true }));
   assert.equal(calls.terminal, 1);
 
+  target.emit("keydown", panelEvent({ key: "Enter", code: "Enter", metaKey: true, altKey: true }));
+  assert.equal(calls.fullscreen, 1);
+
+  // On a platform whose primary modifier is Ctrl, the same chords arrive with
+  // Ctrl instead of Cmd.
+  const other = emitter();
+  globalThis.window = other;
+  const others = { sidebar: 0, right: 0 };
+  const otherHook = renderHook((props) => useGlobalKeyboardShortcuts(props), {
+    onToggleSidebar: () => { others.sidebar += 1; },
+    onToggleRightPanel: () => { others.right += 1; },
+    isMac: false,
+  });
+  other.emit("keydown", panelEvent({ ctrlKey: true }));
+  assert.equal(others.sidebar, 1);
+  other.emit("keydown", panelEvent({ ctrlKey: true, shiftKey: true }));
+  assert.equal(others.right, 1);
+  // The macOS spelling is not a shortcut there.
+  other.emit("keydown", panelEvent({ metaKey: true }));
+  assert.equal(others.sidebar, 1);
+  otherHook.unmount();
+
   hook.unmount();
   delete globalThis.window;
 });
@@ -233,6 +283,7 @@ test("a toggle inside a modal does not move the panels behind it", () => {
   let sidebar = 0;
   const hook = renderHook((props) => useGlobalKeyboardShortcuts(props), {
     onToggleSidebar: () => { sidebar += 1; },
+    isMac: true,
   });
 
   const modalTarget = { closest: (selector) => (selector === "[aria-modal='true']" ? {} : null) };
@@ -246,6 +297,101 @@ test("a toggle inside a modal does not move the panels behind it", () => {
   outside.target = { closest: () => null };
   target.emit("keydown", outside);
   assert.equal(sidebar, 1);
+
+  hook.unmount();
+  delete globalThis.window;
+});
+
+// ---------------------------------------------------------------------------
+// The right panel's tab strip: Alt+W closes the tab, Alt+Shift+[ / ] move
+// ---------------------------------------------------------------------------
+
+test("Alt+W closes the tab on show", () => {
+  assert.equal(isCloseTabShortcut(panelEvent({ key: "w", code: "KeyW", altKey: true })), true);
+  // macOS's Option+W types `∑`, not `w`: the physical key decides.
+  assert.equal(isCloseTabShortcut(panelEvent({ key: "\u2211", code: "KeyW", altKey: true })), true);
+  // Shift is the strip's navigation, and the other modifiers are not ours.
+  assert.equal(isCloseTabShortcut(panelEvent({ key: "w", code: "KeyW", altKey: true, shiftKey: true })), false);
+  assert.equal(isCloseTabShortcut(panelEvent({ key: "w", code: "KeyW", altKey: true, ctrlKey: true })), false);
+  assert.equal(isCloseTabShortcut(panelEvent({ key: "w", code: "KeyW", altKey: true, metaKey: true })), false);
+  assert.equal(isCloseTabShortcut(panelEvent({ key: "w", code: "KeyW" })), false);
+  assert.equal(isCloseTabShortcut(panelEvent({ key: "q", code: "KeyQ", altKey: true })), false);
+});
+
+test("Alt+Shift+[ and Alt+Shift+] move along the strip", () => {
+  // Shift turns the bracket into another character: the physical key decides.
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "{", code: "BracketLeft", altKey: true, shiftKey: true })), "previous");
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "}", code: "BracketRight", altKey: true, shiftKey: true })), "next");
+  // A KeyboardEvent without a code still matches by the bracket.
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "[", code: null, altKey: true, shiftKey: true })), "previous");
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "]", code: null, altKey: true, shiftKey: true })), "next");
+  // Alt alone, Shift alone and the other modifiers are not the chord.
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "[", code: "BracketLeft", altKey: true })), null);
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "[", code: "BracketLeft", shiftKey: true })), null);
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "[", code: "BracketLeft", altKey: true, shiftKey: true, ctrlKey: true })), null);
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "[", code: "BracketLeft", altKey: true, shiftKey: true, metaKey: true })), null);
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "x", code: "KeyX", altKey: true, shiftKey: true })), null);
+});
+
+test("the strip's chords are routed to their own callbacks", () => {
+  const target = emitter();
+  globalThis.window = target;
+  const calls = { closed: 0, direction: [] };
+  const hook = renderHook((props) => useGlobalKeyboardShortcuts(props), {
+    onClosePanelTab: () => { calls.closed += 1; },
+    onSelectAdjacentPanelTab: (direction) => { calls.direction.push(direction); },
+  });
+
+  target.emit("keydown", panelEvent({ key: "w", code: "KeyW", altKey: true }));
+  assert.equal(calls.closed, 1);
+
+  target.emit("keydown", panelEvent({ key: "{", code: "BracketLeft", altKey: true, shiftKey: true }));
+  target.emit("keydown", panelEvent({ key: "}", code: "BracketRight", altKey: true, shiftKey: true }));
+  assert.deepEqual(calls.direction, ["previous", "next"]);
+
+  hook.unmount();
+  delete globalThis.window;
+});
+
+test("the strip's chords never swallow the text of a field", () => {
+  const target = emitter();
+  globalThis.window = target;
+  let closed = 0;
+  const hook = renderHook((props) => useGlobalKeyboardShortcuts(props), {
+    onClosePanelTab: () => { closed += 1; },
+  });
+
+  // The composer: `Alt+W` types `∑` there, and `Alt+Shift+[` types `{`.
+  const composer = panelEvent({ key: "\u2211", code: "KeyW", altKey: true });
+  composer.target = { tagName: "TEXTAREA", classList: { contains: () => false } };
+  target.emit("keydown", composer);
+  assert.equal(closed, 0);
+  assert.equal(composer.defaultPrevented, false, "the character is the user's");
+
+  // The terminal's own textarea is not a text field: xterm keeps the chord
+  // from the shell, so the strip's chord is ours there.
+  const terminal = panelEvent({ key: "\u2211", code: "KeyW", altKey: true });
+  terminal.target = { tagName: "TEXTAREA", classList: { contains: (name) => name === "xterm-helper-textarea" } };
+  target.emit("keydown", terminal);
+  assert.equal(closed, 1);
+  assert.equal(terminal.defaultPrevented, true);
+
+  hook.unmount();
+  delete globalThis.window;
+});
+
+test("the strip's chords do not move the tabs behind a modal", () => {
+  const target = emitter();
+  globalThis.window = target;
+  let closed = 0;
+  const hook = renderHook((props) => useGlobalKeyboardShortcuts(props), {
+    onClosePanelTab: () => { closed += 1; },
+  });
+
+  const event = panelEvent({ key: "w", code: "KeyW", altKey: true });
+  event.target = { closest: (selector) => (selector === "[aria-modal='true']" ? {} : null) };
+  target.emit("keydown", event);
+  assert.equal(closed, 0);
 
   hook.unmount();
   delete globalThis.window;
