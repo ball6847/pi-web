@@ -8,10 +8,12 @@ import { useI18n } from "@/hooks/useI18n";
 import { setTerminalTheme, useTerminalTheme } from "@/hooks/useTerminalTheme";
 import { subscribeFontPreferences } from "@/hooks/useFontPreferences";
 import {
+  isRightPanelFullscreenShortcut,
   isRightPanelToggleShortcut,
   isSidebarToggleShortcut,
   isTerminalToggleShortcut,
 } from "@/hooks/useKeyboardShortcuts";
+import { currentIsMacPlatform } from "@/lib/keyboard-platform";
 import { readFontWeight } from "@/lib/font-preferences";
 import { createTerminalWriter, terminalRequest } from "@/lib/terminal-client";
 import { pageId, trackEventSource } from "@/lib/page-debug";
@@ -122,7 +124,8 @@ export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError }
       if ((event.ctrlKey || event.metaKey) && key === "c" && terminal.hasSelection()) return false;
       // The panel toggles are ours, not the shell's: the global handler acts
       // on them, so xterm must not send them to the PTY.
-      if (isSidebarToggleShortcut(event) || isRightPanelToggleShortcut(event) || isTerminalToggleShortcut(event)) {
+      const isMac = currentIsMacPlatform();
+      if (isSidebarToggleShortcut(event, isMac) || isRightPanelToggleShortcut(event, isMac) || isRightPanelFullscreenShortcut(event, isMac) || isTerminalToggleShortcut(event)) {
         return false;
       }
       return true;

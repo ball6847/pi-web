@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { usePrimaryModifier } from "@/hooks/usePrimaryModifier";
 import { SessionSidebar, type SelectSessionOptions, type SessionSidebarControl } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { NewSessionContextBar, type NewSessionContextControl } from "./NewSessionContextBar";
@@ -1149,6 +1150,10 @@ export function AppShell() {
     if (isMobile) setSidebarOpen(false);
   }, [activeCwd, activeFileTabId, isMobile, newSessionCwd, rightPanelOpen, selectedSession?.cwd, terminalTabs]);
 
+  // The platform's primary modifier: `⌘` on macOS, `Ctrl` on Windows and
+  // Linux. The panel toggles follow it, and the tooltips spell it out.
+  const { isMac, label: primaryModifier } = usePrimaryModifier();
+
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.). Esc stops the
   // run only while the chat is the screen on show: the board view covers a
   // still mounted ChatWindow, whose abort handler would otherwise stop the
@@ -1160,6 +1165,8 @@ export function AppShell() {
     onToggleSidebar: handleSidebarToggle,
     onToggleRightPanel: handleRightPanelToggle,
     onToggleTerminal: handleToggleTerminal,
+    onToggleRightPanelFullscreen: handleRightPanelExpandToggle,
+    isMac,
   });
 
   // Called by ChatWindow when a new session gets its real id from pi
@@ -2699,7 +2706,7 @@ export function AppShell() {
         aria-controls="file-panel"
         aria-expanded={rightPanelOpen}
         aria-hidden={covered ? true : undefined}
-        title={`${rightPanelOpen ? translate("files.hidePanel") : translate("files.showPanel")} (${translate("shortcut.toggleRightPanel")})`}
+        title={`${rightPanelOpen ? translate("files.hidePanel") : translate("files.showPanel")} (${translate("shortcut.toggleRightPanel", { mod: primaryModifier })})`}
         aria-label={rightPanelOpen ? translate("files.hidePanel") : translate("files.showPanel")}
         data-mobile-toolbar-file={mobile ? "true" : undefined}
         style={{
@@ -2872,7 +2879,7 @@ export function AppShell() {
         <div style={{ display: "flex", alignItems: "center", position: "relative", borderBottom: "1px solid var(--border)", height: "calc(36px + env(safe-area-inset-top))", paddingTop: "env(safe-area-inset-top)" }}>
           <button
             onClick={handleSidebarToggle}
-             title={`${sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")} (${translate("shortcut.toggleSidebar")})`}
+             title={`${sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")} (${translate("shortcut.toggleSidebar", { mod: primaryModifier })})`}
              aria-label={sidebarOpen ? translate("sidebar.hide") : translate("sidebar.show")}
             style={{
               display: "flex", alignItems: "center", justifyContent: "center",
@@ -3417,7 +3424,7 @@ export function AppShell() {
             onClick={handleRightPanelExpandToggle}
             aria-controls="file-panel"
             aria-pressed={rightPanelFullWidth}
-            title={translate(rightPanelFullWidth ? "files.restorePanelWidth" : "files.expandPanel")}
+            title={`${translate(rightPanelFullWidth ? "files.restorePanelWidth" : "files.expandPanel")} (${translate("shortcut.toggleRightPanelFullscreen", { mod: primaryModifier })})`}
             aria-label={translate(rightPanelFullWidth ? "files.restorePanelWidth" : "files.expandPanel")}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
