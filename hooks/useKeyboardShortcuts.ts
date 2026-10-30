@@ -91,6 +91,18 @@ function isLetterB(event: PanelShortcutEvent): boolean {
 }
 
 /**
+ * Whether the key is the letter `w`, whatever the layout says.
+ *
+ * The letter decides (`event.key`), so the shortcut follows the keyboard. The
+ * physical key (`code`) is the fallback for the layouts that report a
+ * character instead of the letter: macOS's `Option+W` types `∑`, not `w`.
+ */
+function isLetterW(event: PanelShortcutEvent): boolean {
+  if (event.key.toLowerCase() === "w") return true;
+  return event.code === "KeyW";
+}
+
+/**
  * Whether the key is the backquote (`code === "Backquote"`).
  *
  * The physical key decides, because the character it types differs per
@@ -167,6 +179,41 @@ export function isTerminalToggleShortcut(event: PanelShortcutEvent): boolean {
 }
 
 /**
+ * `Alt+W`: close the right panel's tab on show.
+ *
+ * `Alt` is the modifier, not the platform's primary one, so the chord reads
+ * the same everywhere. `Ctrl` and `Cmd` are refused: Windows reports AltGr
+ * as Ctrl+Alt, and an AltGr combination that types a character is the user's
+ * text.
+ */
+export function isCloseTabShortcut(event: PanelShortcutEvent): boolean {
+  if (!event.altKey || event.shiftKey || event.ctrlKey || event.metaKey) return false;
+  return isLetterW(event);
+}
+
+/** Which way along the right panel's tab strip a chord moves. */
+export type PanelTabDirection = "previous" | "next";
+
+/**
+ * `Alt+Shift+[` and `Alt+Shift+]`: the right panel's previous and next tab.
+ *
+ * The physical key decides (`code === "BracketLeft"` / `"BracketRight"`),
+ * because `Shift` turns the bracket into another character (`{`, `}`) and the
+ * letter of the layout's own bracket key is not the bracket.
+ */
+export function isPanelTabNavigationShortcut(event: PanelShortcutEvent): PanelTabDirection | null {
+  if (!event.altKey || !event.shiftKey || event.ctrlKey || event.metaKey) return null;
+  if (event.code) {
+    if (event.code === "BracketLeft") return "previous";
+    if (event.code === "BracketRight") return "next";
+    return null;
+  }
+  if (event.key === "[") return "previous";
+  if (event.key === "]") return "next";
+  return null;
+}
+
+/**
  * Whether the event carries the platform's primary modifier: `Cmd` on macOS,
  * `Ctrl` on Windows and Linux.
  */
@@ -187,6 +234,23 @@ function isInsideModal(event: KeyboardEvent): boolean {
   return target.closest("[aria-modal='true']") !== null;
 }
 
+/**
+ * Whether the key was typed into a text field (the composer, a settings
+ * input), where the panel's own chords must not swallow the text: `Alt+W`
+ * types `∑` on macOS and `Alt+Shift+[` types `{`.
+ *
+ * The terminal's hidden textarea is not one of those fields: xterm keeps the
+ * panel's chords from the shell (see `TerminalPanel`), so they are ours
+ * there.
+ */
+function isTextEditingField(event: KeyboardEvent): boolean {
+  const target = event.target as HTMLElement | null;
+  if (!target) return false;
+  const tag = target.tagName;
+  if (tag !== "TEXTAREA" && tag !== "INPUT") return false;
+  return !target.classList?.contains("xterm-helper-textarea");
+}
+
 // ---------------------------------------------------------------------------
 // Hook: global keyboard shortcuts
 // ---------------------------------------------------------------------------
@@ -202,6 +266,10 @@ interface UseGlobalKeyboardShortcutsOptions {
   onToggleTerminal?: () => void;
   /** Called when the right panel's full-width chord is pressed. */
   onToggleRightPanelFullscreen?: () => void;
+  /** Called when the right panel's tab on show should close. */
+  onClosePanelTab?: () => void;
+  /** Called when the right panel should show its next or previous tab. */
+  onSelectAdjacentPanelTab?: (direction: PanelTabDirection) => void;
   /**
    * Whether the platform's primary modifier is `Cmd` (macOS) rather than
    * `Ctrl` (Windows, Linux). The platform toggles follow it, so a chord
@@ -248,6 +316,8 @@ export function useGlobalKeyboardShortcuts(
     onToggleRightPanel,
     onToggleTerminal,
     onToggleRightPanelFullscreen,
+    onClosePanelTab,
+    onSelectAdjacentPanelTab,
     isMac = false,
   } = options;
 
@@ -264,6 +334,25 @@ export function useGlobalKeyboardShortcuts(
         if (!activeCwd || !onNewSession) return;
         e.preventDefault();
         onNewSession(activeCwd);
+        return;
+      }
+
+      // ---- The right panel's tab strip ----
+      // These chords are the panel's own, and they type characters: they are
+      // refused inside a text field, where the text is the user's.
+      if (isCloseTabShortcut(e)) {
+        if (!onClosePanelTab) return;
+        if (isInsideModal(e) || isTextEditingField(e)) return;
+        e.preventDefault();
+        onClosePanelTab();
+        return;
+      }
+      const direction = isPanelTabNavigationShortcut(e);
+      if (direction) {
+        if (!onSelectAdjacentPanelTab) return;
+        if (isInsideModal(e) || isTextEditingField(e)) return;
+        e.preventDefault();
+        onSelectAdjacentPanelTab(direction);
         return;
       }
 
@@ -301,5 +390,5 @@ export function useGlobalKeyboardShortcuts(
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeCwd, escapeStopsAgent, isMac, onNewSession, onToggleRightPanel, onToggleRightPanelFullscreen, onToggleSidebar, onToggleTerminal]);
+  }, [activeCwd, escapeStopsAgent, isMac, onClosePanelTab, onNewSession, onSelectAdjacentPanelTab, onToggleRightPanel, onToggleRightPanelFullscreen, onToggleSidebar, onToggleTerminal]);
 }

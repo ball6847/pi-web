@@ -8,6 +8,8 @@ import { useI18n } from "@/hooks/useI18n";
 import { setTerminalTheme, useTerminalTheme } from "@/hooks/useTerminalTheme";
 import { subscribeFontPreferences } from "@/hooks/useFontPreferences";
 import {
+  isCloseTabShortcut,
+  isPanelTabNavigationShortcut,
   isRightPanelFullscreenShortcut,
   isRightPanelToggleShortcut,
   isSidebarToggleShortcut,
@@ -36,17 +38,23 @@ interface Props {
   onRestart: () => void;
   onClosed: () => void;
   onCloseError: () => void;
+  /**
+   * Called when the shell itself is gone (it exited, or the server closed it).
+   * The tab goes with the process: a tab of a shell that is not there any more
+   * is a dead tab.
+   */
+  onProcessExit?: () => void;
 }
 
-export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError }: Props) {
+export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError, onProcessExit }: Props) {
   const { t } = useI18n();
   const { id, cwd, restored } = tab;
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const startRef = useRef<Promise<void>>(Promise.resolve());
   const writerRef = useRef<ReturnType<typeof createTerminalWriter> | null>(null);
-  const callbacksRef = useRef({ onClosed, onCloseError });
-  callbacksRef.current = { onClosed, onCloseError };
+  const callbacksRef = useRef({ onClosed, onCloseError, onProcessExit });
+  callbacksRef.current = { onClosed, onCloseError, onProcessExit };
   const [status, setStatus] = useState<"connecting" | "ready" | "exited" | "error">("connecting");
   const [error, setError] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -128,6 +136,9 @@ export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError }
       if (isSidebarToggleShortcut(event, isMac) || isRightPanelToggleShortcut(event, isMac) || isRightPanelFullscreenShortcut(event, isMac) || isTerminalToggleShortcut(event)) {
         return false;
       }
+      // The tab strip's chords are ours too: the shell must not read `Alt+W`
+      // as its own "delete the word" binding.
+      if (isCloseTabShortcut(event) || isPanelTabNavigationShortcut(event)) return false;
       return true;
     });
 
@@ -183,6 +194,10 @@ export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError }
           events?.close();
           setExitCode(event.type === "exit" ? event.exitCode : null);
           setStatus("exited");
+          // The shell is gone: its tab goes with it, unless the tab is
+          // already on its way out (the user closed it, which ends the
+          // process too).
+          callbacksRef.current.onProcessExit?.();
         }
       };
       events.onopen = () => {

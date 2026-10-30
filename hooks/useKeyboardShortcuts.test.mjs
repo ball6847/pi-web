@@ -10,7 +10,9 @@ const jiti = createJiti(import.meta.url, { tsconfigPaths: true, alias: { react: 
 const { renderHook } = await import(shimPath);
 const {
   handleGlobalEscape,
+  isCloseTabShortcut,
   isNewSessionShortcut,
+  isPanelTabNavigationShortcut,
   isRightPanelFullscreenShortcut,
   isRightPanelToggleShortcut,
   isSidebarToggleShortcut,
@@ -295,6 +297,101 @@ test("a toggle inside a modal does not move the panels behind it", () => {
   outside.target = { closest: () => null };
   target.emit("keydown", outside);
   assert.equal(sidebar, 1);
+
+  hook.unmount();
+  delete globalThis.window;
+});
+
+// ---------------------------------------------------------------------------
+// The right panel's tab strip: Alt+W closes the tab, Alt+Shift+[ / ] move
+// ---------------------------------------------------------------------------
+
+test("Alt+W closes the tab on show", () => {
+  assert.equal(isCloseTabShortcut(panelEvent({ key: "w", code: "KeyW", altKey: true })), true);
+  // macOS's Option+W types `∑`, not `w`: the physical key decides.
+  assert.equal(isCloseTabShortcut(panelEvent({ key: "\u2211", code: "KeyW", altKey: true })), true);
+  // Shift is the strip's navigation, and the other modifiers are not ours.
+  assert.equal(isCloseTabShortcut(panelEvent({ key: "w", code: "KeyW", altKey: true, shiftKey: true })), false);
+  assert.equal(isCloseTabShortcut(panelEvent({ key: "w", code: "KeyW", altKey: true, ctrlKey: true })), false);
+  assert.equal(isCloseTabShortcut(panelEvent({ key: "w", code: "KeyW", altKey: true, metaKey: true })), false);
+  assert.equal(isCloseTabShortcut(panelEvent({ key: "w", code: "KeyW" })), false);
+  assert.equal(isCloseTabShortcut(panelEvent({ key: "q", code: "KeyQ", altKey: true })), false);
+});
+
+test("Alt+Shift+[ and Alt+Shift+] move along the strip", () => {
+  // Shift turns the bracket into another character: the physical key decides.
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "{", code: "BracketLeft", altKey: true, shiftKey: true })), "previous");
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "}", code: "BracketRight", altKey: true, shiftKey: true })), "next");
+  // A KeyboardEvent without a code still matches by the bracket.
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "[", code: null, altKey: true, shiftKey: true })), "previous");
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "]", code: null, altKey: true, shiftKey: true })), "next");
+  // Alt alone, Shift alone and the other modifiers are not the chord.
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "[", code: "BracketLeft", altKey: true })), null);
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "[", code: "BracketLeft", shiftKey: true })), null);
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "[", code: "BracketLeft", altKey: true, shiftKey: true, ctrlKey: true })), null);
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "[", code: "BracketLeft", altKey: true, shiftKey: true, metaKey: true })), null);
+  assert.equal(isPanelTabNavigationShortcut(panelEvent({ key: "x", code: "KeyX", altKey: true, shiftKey: true })), null);
+});
+
+test("the strip's chords are routed to their own callbacks", () => {
+  const target = emitter();
+  globalThis.window = target;
+  const calls = { closed: 0, direction: [] };
+  const hook = renderHook((props) => useGlobalKeyboardShortcuts(props), {
+    onClosePanelTab: () => { calls.closed += 1; },
+    onSelectAdjacentPanelTab: (direction) => { calls.direction.push(direction); },
+  });
+
+  target.emit("keydown", panelEvent({ key: "w", code: "KeyW", altKey: true }));
+  assert.equal(calls.closed, 1);
+
+  target.emit("keydown", panelEvent({ key: "{", code: "BracketLeft", altKey: true, shiftKey: true }));
+  target.emit("keydown", panelEvent({ key: "}", code: "BracketRight", altKey: true, shiftKey: true }));
+  assert.deepEqual(calls.direction, ["previous", "next"]);
+
+  hook.unmount();
+  delete globalThis.window;
+});
+
+test("the strip's chords never swallow the text of a field", () => {
+  const target = emitter();
+  globalThis.window = target;
+  let closed = 0;
+  const hook = renderHook((props) => useGlobalKeyboardShortcuts(props), {
+    onClosePanelTab: () => { closed += 1; },
+  });
+
+  // The composer: `Alt+W` types `∑` there, and `Alt+Shift+[` types `{`.
+  const composer = panelEvent({ key: "\u2211", code: "KeyW", altKey: true });
+  composer.target = { tagName: "TEXTAREA", classList: { contains: () => false } };
+  target.emit("keydown", composer);
+  assert.equal(closed, 0);
+  assert.equal(composer.defaultPrevented, false, "the character is the user's");
+
+  // The terminal's own textarea is not a text field: xterm keeps the chord
+  // from the shell, so the strip's chord is ours there.
+  const terminal = panelEvent({ key: "\u2211", code: "KeyW", altKey: true });
+  terminal.target = { tagName: "TEXTAREA", classList: { contains: (name) => name === "xterm-helper-textarea" } };
+  target.emit("keydown", terminal);
+  assert.equal(closed, 1);
+  assert.equal(terminal.defaultPrevented, true);
+
+  hook.unmount();
+  delete globalThis.window;
+});
+
+test("the strip's chords do not move the tabs behind a modal", () => {
+  const target = emitter();
+  globalThis.window = target;
+  let closed = 0;
+  const hook = renderHook((props) => useGlobalKeyboardShortcuts(props), {
+    onClosePanelTab: () => { closed += 1; },
+  });
+
+  const event = panelEvent({ key: "w", code: "KeyW", altKey: true });
+  event.target = { closest: (selector) => (selector === "[aria-modal='true']" ? {} : null) };
+  target.emit("keydown", event);
+  assert.equal(closed, 0);
 
   hook.unmount();
   delete globalThis.window;

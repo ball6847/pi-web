@@ -672,7 +672,7 @@ export function AppShell() {
    * twice; the panel opens for it and AppShell clears it once the panel closes.
    */
   const [agentPanelFocus, setAgentPanelFocus] = useState<{ sessionId: string; nonce: number } | null>(null);
-  const panelTabs: Tab[] = [
+  const panelTabs: Tab[] = useMemo(() => [
     ...fileTabs,
     ...terminalTabs.map((tab) => ({
       id: tab.id,
@@ -694,7 +694,7 @@ export function AppShell() {
       filePath: "",
       kind: "card" as const,
     })),
-  ];
+  ], [fileTabs, terminalTabs, agentTabs, cardTabs]);
 
   useEffect(() => {
     try {
@@ -1154,20 +1154,8 @@ export function AppShell() {
   // Linux. The panel toggles follow it, and the tooltips spell it out.
   const { isMac, label: primaryModifier } = usePrimaryModifier();
 
-  // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.). Esc stops the
-  // run only while the chat is the screen on show: the board view covers a
-  // still mounted ChatWindow, whose abort handler would otherwise stop the
-  // session running behind the board.
-  useGlobalKeyboardShortcuts({
-    onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
-    activeCwd,
-    escapeStopsAgent: centerView === "chat",
-    onToggleSidebar: handleSidebarToggle,
-    onToggleRightPanel: handleRightPanelToggle,
-    onToggleTerminal: handleToggleTerminal,
-    onToggleRightPanelFullscreen: handleRightPanelExpandToggle,
-    isMac,
-  });
+  // Global keyboard shortcuts are wired further down, with the tab strip's
+  // handlers (the strip's chords close and move between the panel's tabs).
 
   // Called by ChatWindow when a new session gets its real id from pi
   const handleSessionCreated = useCallback((session: SessionInfo, sourceDraftKey: string, kanban?: KanbanAttachOutcome) => {
@@ -1580,6 +1568,30 @@ export function AppShell() {
     });
   }, [fileTabs, terminalTabs, agentTabs, cardTabs]);
 
+  // The right panel's tab strip, by keyboard: `Alt+W` closes the tab on show,
+  // and `Alt+Shift+[` / `Alt+Shift+]` move along the strip. The strip shows
+  // the file, terminal, subagent and card tabs in that order, and that is the
+  // order the navigation follows.
+  const handleCloseActivePanelTab = useCallback(() => {
+    // Only a tab the user can see: the panel may be closed with its tabs
+    // still open.
+    if (!rightPanelOpen || !activeFileTabId) return;
+    handleCloseFileTab(activeFileTabId);
+  }, [activeFileTabId, handleCloseFileTab, rightPanelOpen]);
+
+  const handleSelectAdjacentPanelTab = useCallback((direction: "previous" | "next") => {
+    if (!panelTabs.length) return;
+    const index = panelTabs.findIndex((tab) => tab.id === activeFileTabId);
+    const next = index === -1
+      ? (direction === "next" ? 0 : panelTabs.length - 1)
+      : (index + (direction === "next" ? 1 : -1) + panelTabs.length) % panelTabs.length;
+    const tab = panelTabs[next];
+    if (!tab) return;
+    setActiveFileTabId(tab.id);
+    // Moving along the strip shows the tab it lands on.
+    setRightPanelOpen(true);
+  }, [activeFileTabId, panelTabs]);
+
   const handleViewFullHistory = useCallback(() => {
     if (!selectedSession) return;
     window.open(
@@ -1588,6 +1600,23 @@ export function AppShell() {
       "noopener,noreferrer",
     );
   }, [selectedSession]);
+
+  // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.). Esc stops the
+  // run only while the chat is the screen on show: the board view covers a
+  // still mounted ChatWindow, whose abort handler would otherwise stop the
+  // session running behind the board.
+  useGlobalKeyboardShortcuts({
+    onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
+    activeCwd,
+    escapeStopsAgent: centerView === "chat",
+    onToggleSidebar: handleSidebarToggle,
+    onToggleRightPanel: handleRightPanelToggle,
+    onToggleTerminal: handleToggleTerminal,
+    onToggleRightPanelFullscreen: handleRightPanelExpandToggle,
+    onClosePanelTab: handleCloseActivePanelTab,
+    onSelectAdjacentPanelTab: handleSelectAdjacentPanelTab,
+    isMac,
+  });
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
@@ -3495,6 +3524,7 @@ export function AppShell() {
                 onRestart={() => setTerminalTabs((tabs) => tabs.map((item) => item.id === tab.id ? { ...item, closing: "restart" } : item))}
                 onClosed={() => handleTerminalClosed(tab)}
                 onCloseError={() => setTerminalTabs((tabs) => tabs.map((item) => item.id === tab.id ? { ...item, closing: undefined } : item))}
+                onProcessExit={() => handleCloseFileTab(tab.id)}
               />
             </div>
           ))}
