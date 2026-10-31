@@ -150,6 +150,23 @@ export function isRightPanelToggleShortcut(event: PanelShortcutEvent, isMac: boo
 }
 
 /**
+ * `Cmd/Ctrl+P`: open the Quick Open palette.
+ *
+ * One chord, VSCode's muscle memory for "go to file". The browser owns
+ * `Ctrl+P` for printing, and a page can take that chord back: the handler
+ * stops the default on every press, so the browser never prints.
+ *
+ * `Alt` is refused, because Windows reports AltGr as Ctrl+Alt and an AltGr
+ * combination that types a character is the user's text. `Shift` is refused
+ * too: `Cmd/Ctrl+Shift+P` belongs to the browser (the developer tools).
+ */
+export function isQuickOpenShortcut(event: PanelShortcutEvent, isMac: boolean): boolean {
+  if (event.altKey || event.shiftKey) return false;
+  if (!hasPrimaryModifier(event, isMac)) return false;
+  return event.key.toLowerCase() === "p";
+}
+
+/**
  * `Cmd+Alt+Enter` on macOS, `Ctrl+Alt+Enter` elsewhere: the right panel's
  * full-width mode.
  *
@@ -235,6 +252,19 @@ function isInsideModal(event: KeyboardEvent): boolean {
 }
 
 /**
+ * Whether the key was pressed inside the Quick Open palette.
+ *
+ * The palette is a modal of its own, so `isInsideModal()` cannot tell it
+ * apart from Settings or the trust dialog: the palette answers its own chord
+ * (it takes the key again and focuses its field), the other modals do not.
+ */
+function isInsideQuickOpen(event: KeyboardEvent): boolean {
+  const target = event.target as HTMLElement | null;
+  if (!target || typeof target.closest !== "function") return false;
+  return target.closest("[data-quick-open]") !== null;
+}
+
+/**
  * Whether the key was typed into a text field (the composer, a settings
  * input), where the panel's own chords must not swallow the text: `Alt+W`
  * types `∑` on macOS and `Alt+Shift+[` types `{`.
@@ -270,6 +300,8 @@ interface UseGlobalKeyboardShortcutsOptions {
   onClosePanelTab?: () => void;
   /** Called when the right panel should show its next or previous tab. */
   onSelectAdjacentPanelTab?: (direction: PanelTabDirection) => void;
+  /** Called when the Quick Open palette's chord is pressed. */
+  onOpenQuickOpen?: () => void;
   /**
    * Whether the platform's primary modifier is `Cmd` (macOS) rather than
    * `Ctrl` (Windows, Linux). The platform toggles follow it, so a chord
@@ -298,6 +330,7 @@ interface UseGlobalKeyboardShortcutsOptions {
  *   Cmd/Ctrl+Shift+B – toggle the right panel
  *   Cmd/Ctrl+Alt+Enter – the right panel's full-width mode
  *   Ctrl+`       – toggle the terminal
+ *   Cmd/Ctrl+P   – open the Quick Open palette
  *
  * Note: Esc inside <textarea> or <input> is deliberately NOT handled here.
  * ChatInput manages its own Esc logic (closing slash / @ file menus, stopping
@@ -318,6 +351,7 @@ export function useGlobalKeyboardShortcuts(
     onToggleRightPanelFullscreen,
     onClosePanelTab,
     onSelectAdjacentPanelTab,
+    onOpenQuickOpen,
     isMac = false,
   } = options;
 
@@ -356,6 +390,25 @@ export function useGlobalKeyboardShortcuts(
         return;
       }
 
+      // ---- Quick Open: the palette over the whole page ----
+      if (isQuickOpenShortcut(e, isMac)) {
+        if (!onOpenQuickOpen) return;
+        // The chord is ours, and it is taken from the browser: `Cmd/Ctrl+P`
+        // prints and `Cmd/Ctrl+K` opens the browser's own search, and both
+        // must not happen while the palette has them. So the default is
+        // stopped first, every time — including a second press with the
+        // palette already open, which is where the browser used to get them.
+        e.preventDefault();
+        // Another modal (Settings, the trust dialog) owns the screen: the
+        // palette would open over it. The key is still ours, so it stays
+        // swallowed.
+        if (isInsideModal(e) && !isInsideQuickOpen(e)) return;
+        // The palette is already open: this takes the key again and puts the
+        // caret back in its field, without losing what was typed.
+        onOpenQuickOpen();
+        return;
+      }
+
       // ---- Panel toggles: sidebar, right panel, terminal ----
       // The terminal is checked first: it is the only chord that carries no
       // letter, so it cannot be mistaken for the other two.
@@ -390,5 +443,5 @@ export function useGlobalKeyboardShortcuts(
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeCwd, escapeStopsAgent, isMac, onClosePanelTab, onNewSession, onSelectAdjacentPanelTab, onToggleRightPanel, onToggleRightPanelFullscreen, onToggleSidebar, onToggleTerminal]);
+  }, [activeCwd, escapeStopsAgent, isMac, onClosePanelTab, onNewSession, onOpenQuickOpen, onSelectAdjacentPanelTab, onToggleRightPanel, onToggleRightPanelFullscreen, onToggleSidebar, onToggleTerminal]);
 }
