@@ -35,6 +35,7 @@ function makeContext(overrides = {}) {
     router: { replace() {} },
     workspaceKeyOf: (value) => value.projectKey ?? value.cwd,
     useCallback: (callback) => callback,
+    focusComposerWhenReady() {},
     changeFileWorkspace() {},
     invalidateWorkspaceRestore() {},
     activeNewSessionDraftKeyRef: { current: null },

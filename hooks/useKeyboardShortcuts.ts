@@ -150,6 +150,38 @@ export function isRightPanelToggleShortcut(event: PanelShortcutEvent, isMac: boo
 }
 
 /**
+ * Whether the key is the letter `l`, whatever the layout says.
+ *
+ * The letter decides (`event.key`), so the shortcut follows the keyboard. The
+ * physical key (`code`) is the fallback for the layouts that report a dead
+ * key (macOS's `Option`+letter), as `isNewSessionShortcut()` does for
+ * `Ctrl+Alt+N`.
+ */
+function isLetterL(event: PanelShortcutEvent): boolean {
+  if (event.key.toLowerCase() === "l") return true;
+  return event.key === "Dead" && event.code === "KeyL";
+}
+
+/**
+ * `Cmd/Ctrl+L`: focus the chat composer.
+ *
+ * The composer is the one field the user reaches for most, so one chord
+ * brings it back from wherever the focus is: the sidebar, the transcript, a
+ * file tab, the board. VSCode binds the same chord to the chat input.
+ *
+ * The browser owns `Ctrl+L` (the address bar), so the chord is taken from it
+ * the way `Cmd/Ctrl+P` is taken from the browser's print dialog: the default
+ * is stopped on every press and the composer takes the caret instead.
+ * `Alt` and `Shift` are refused (`Shift` belongs to the right panel, `Alt` to
+ * AltGr).
+ */
+export function isFocusComposerShortcut(event: PanelShortcutEvent, isMac: boolean): boolean {
+  if (event.altKey || event.shiftKey) return false;
+  if (!hasPrimaryModifier(event, isMac)) return false;
+  return isLetterL(event);
+}
+
+/**
  * `Cmd/Ctrl+P`: open the Quick Open palette.
  *
  * One chord, VSCode's muscle memory for "go to file". The browser owns
@@ -302,6 +334,8 @@ interface UseGlobalKeyboardShortcutsOptions {
   onSelectAdjacentPanelTab?: (direction: PanelTabDirection) => void;
   /** Called when the Quick Open palette's chord is pressed. */
   onOpenQuickOpen?: () => void;
+  /** Called when the composer-focus chord is pressed. */
+  onFocusComposer?: () => void;
   /**
    * Whether the platform's primary modifier is `Cmd` (macOS) rather than
    * `Ctrl` (Windows, Linux). The platform toggles follow it, so a chord
@@ -331,6 +365,7 @@ interface UseGlobalKeyboardShortcutsOptions {
  *   Cmd/Ctrl+Alt+Enter – the right panel's full-width mode
  *   Ctrl+`       – toggle the terminal
  *   Cmd/Ctrl+P   – open the Quick Open palette
+ *   Cmd/Ctrl+L   – focus the chat composer
  *
  * Note: Esc inside <textarea> or <input> is deliberately NOT handled here.
  * ChatInput manages its own Esc logic (closing slash / @ file menus, stopping
@@ -352,6 +387,7 @@ export function useGlobalKeyboardShortcuts(
     onClosePanelTab,
     onSelectAdjacentPanelTab,
     onOpenQuickOpen,
+    onFocusComposer,
     isMac = false,
   } = options;
 
@@ -409,6 +445,20 @@ export function useGlobalKeyboardShortcuts(
         return;
       }
 
+      // ---- Cmd/Ctrl+L: focus the composer ----
+      if (isFocusComposerShortcut(e, isMac)) {
+        if (!onFocusComposer) return;
+        // The chord is ours, and it is taken from the browser (the address
+        // bar): the default is stopped first, every time.
+        e.preventDefault();
+        // A modal (Settings, the trust dialog, the palette) owns the screen:
+        // the composer is not what the user is looking at. The key stays
+        // swallowed.
+        if (isInsideModal(e)) return;
+        onFocusComposer();
+        return;
+      }
+
       // ---- Panel toggles: sidebar, right panel, terminal ----
       // The terminal is checked first: it is the only chord that carries no
       // letter, so it cannot be mistaken for the other two.
@@ -443,5 +493,5 @@ export function useGlobalKeyboardShortcuts(
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeCwd, escapeStopsAgent, isMac, onClosePanelTab, onNewSession, onOpenQuickOpen, onSelectAdjacentPanelTab, onToggleRightPanel, onToggleRightPanelFullscreen, onToggleSidebar, onToggleTerminal]);
+  }, [activeCwd, escapeStopsAgent, isMac, onClosePanelTab, onFocusComposer, onNewSession, onOpenQuickOpen, onSelectAdjacentPanelTab, onToggleRightPanel, onToggleRightPanelFullscreen, onToggleSidebar, onToggleTerminal]);
 }

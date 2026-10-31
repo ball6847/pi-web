@@ -11,6 +11,7 @@ const { renderHook } = await import(shimPath);
 const {
   handleGlobalEscape,
   isCloseTabShortcut,
+  isFocusComposerShortcut,
   isNewSessionShortcut,
   isPanelTabNavigationShortcut,
   isRightPanelFullscreenShortcut,
@@ -392,6 +393,70 @@ test("the strip's chords do not move the tabs behind a modal", () => {
   event.target = { closest: (selector) => (selector === "[aria-modal='true']" ? {} : null) };
   target.emit("keydown", event);
   assert.equal(closed, 0);
+
+  hook.unmount();
+  delete globalThis.window;
+});
+
+// ---------------------------------------------------------------------------
+// The composer chord: Cmd/Ctrl+L
+// ---------------------------------------------------------------------------
+
+test("Cmd/Ctrl+L focuses the composer, the platform's primary modifier", () => {
+  assert.equal(isFocusComposerShortcut(panelEvent({ key: "l", code: "KeyL", metaKey: true }), true), true);
+  assert.equal(isFocusComposerShortcut(panelEvent({ key: "l", code: "KeyL", ctrlKey: true }), false), true);
+  // The other platform's modifier is not the chord.
+  assert.equal(isFocusComposerShortcut(panelEvent({ key: "l", code: "KeyL", ctrlKey: true }), true), false);
+  assert.equal(isFocusComposerShortcut(panelEvent({ key: "l", code: "KeyL", metaKey: true }), false), false);
+  // Caps Lock still delivers the letter.
+  assert.equal(isFocusComposerShortcut(panelEvent({ key: "L", code: "KeyL", metaKey: true }), true), true);
+  // A dead key (macOS's Option+letter) is matched by its physical key.
+  assert.equal(isFocusComposerShortcut(panelEvent({ key: "Dead", code: "KeyL", metaKey: true }), true), true);
+  // Another letter is not the chord.
+  assert.equal(isFocusComposerShortcut(panelEvent({ key: "k", code: "KeyK", metaKey: true }), true), false);
+});
+
+test("the composer chord refuses Alt and Shift", () => {
+  // Alt is the AltGr modifier (a character the user typed), Shift belongs to
+  // the right panel.
+  assert.equal(isFocusComposerShortcut(panelEvent({ key: "l", code: "KeyL", metaKey: true, altKey: true }), true), false);
+  assert.equal(isFocusComposerShortcut(panelEvent({ key: "l", code: "KeyL", metaKey: true, shiftKey: true }), true), false);
+  // Without a modifier it is a plain letter.
+  assert.equal(isFocusComposerShortcut(panelEvent({ key: "l", code: "KeyL" }), true), false);
+});
+
+test("the composer chord focuses the composer and takes the key from the browser", () => {
+  const target = emitter();
+  globalThis.window = target;
+  let focused = 0;
+  const hook = renderHook((props) => useGlobalKeyboardShortcuts(props), {
+    onFocusComposer: () => { focused += 1; },
+    isMac: true,
+  });
+
+  const event = panelEvent({ key: "l", code: "KeyL", metaKey: true });
+  target.emit("keydown", event);
+  assert.equal(focused, 1);
+  assert.equal(event.defaultPrevented, true, "the browser does not get its address bar");
+
+  hook.unmount();
+  delete globalThis.window;
+});
+
+test("the composer chord does nothing behind a modal", () => {
+  const target = emitter();
+  globalThis.window = target;
+  let focused = 0;
+  const hook = renderHook((props) => useGlobalKeyboardShortcuts(props), {
+    onFocusComposer: () => { focused += 1; },
+    isMac: true,
+  });
+
+  const event = panelEvent({ key: "l", code: "KeyL", metaKey: true });
+  event.target = { closest: (selector) => (selector === "[aria-modal='true']" ? {} : null) };
+  target.emit("keydown", event);
+  assert.equal(focused, 0);
+  assert.equal(event.defaultPrevented, true, "the key stays swallowed");
 
   hook.unmount();
   delete globalThis.window;

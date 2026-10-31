@@ -9,6 +9,7 @@ import { setTerminalTheme, useTerminalTheme } from "@/hooks/useTerminalTheme";
 import { subscribeFontPreferences } from "@/hooks/useFontPreferences";
 import {
   isCloseTabShortcut,
+  isFocusComposerShortcut,
   isPanelTabNavigationShortcut,
   isRightPanelFullscreenShortcut,
   isRightPanelToggleShortcut,
@@ -136,6 +137,9 @@ export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError, 
       if (isSidebarToggleShortcut(event, isMac) || isRightPanelToggleShortcut(event, isMac) || isRightPanelFullscreenShortcut(event, isMac) || isTerminalToggleShortcut(event)) {
         return false;
       }
+      // The composer chord is ours too: the shell must not read `Ctrl+L` as
+      // its own "clear the screen" binding.
+      if (isFocusComposerShortcut(event, isMac)) return false;
       // The tab strip's chords are ours too: the shell must not read `Alt+W`
       // as its own "delete the word" binding.
       if (isCloseTabShortcut(event) || isPanelTabNavigationShortcut(event)) return false;
