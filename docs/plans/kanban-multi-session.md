@@ -275,6 +275,22 @@ one lane — that is the point of a board); an assignee editor on the board card
 avatars; notification per participant; multi-card sessions; and any styling
 that changes the board card's height when helpers appear.
 
+## Status — P0 shipped
+
+**P0 is implemented and merged-ready** (`ball6847/pi-web#33`, rebased onto
+`kanban`): the family resolver, the helper's narrow powers, the delegated
+notice line, and the widened card signature. Nothing in the UI changed, and the
+deferred P1/P2/P3 work below is untouched.
+
+Live evidence (a real SDK session delegating to a real subagent, board and
+activity trail read in the browser):
+[verification report](../reports/kanban-delegation-verification.md) ·
+[screenshots](../reports/screenshots/kanban-delegation/).
+
+What P0 does **not** do: it resolves one hop (a child's parent) and nothing
+else. A card still has exactly one owner, and a helper is not listed anywhere —
+the card's journal shows the family's work, the card itself shows the owner.
+
 ## Phasing
 
 - **P0 — subagents act as their parent. ~1 h.** Family resolver in
