@@ -77,10 +77,10 @@
 }
 
 .quick-open-group-label {
-  padding: 6px 10px 3px;
-  font-size: 10px;
+  padding: 5px 10px 2px;
+  font-size: 9px;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--text-dim);
 }
