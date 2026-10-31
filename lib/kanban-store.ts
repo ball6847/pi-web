@@ -59,7 +59,7 @@ import {
 } from "./kanban-types";
 import { isMcpEntryRefusal, validateMcpProject } from "./mcp-entry-request";
 import { readRegularFileText } from "./regular-file";
-import { invalidateSessionPathCache, readSessionHeader, resolveSessionPath } from "./session-reader";
+import { invalidateSessionPathCache, readSessionDelegatedFrom, readSessionHeader, resolveSessionPath } from "./session-reader";
 import { listWorktrees, resolveProject } from "./worktree";
 
 // SERVER-ONLY. The kanban board's policy: which file holds a project's board,
@@ -814,6 +814,12 @@ export async function executeKanbanToolRequest(
       return failure("session-missing", "The executing session does not exist in this project yet. Wait for its session file to be saved, then retry.");
     }
     checkKanbanSignal(signal);
+    // Who delegated this session, resolved here and never by the caller: a model
+    // cannot claim a delegation it was not given. One bounded head read.
+    const scoped: KanbanToolActor = {
+      ...actor,
+      delegatedFrom: await readSessionDelegatedFrom(actor.sessionId),
+    };
     if (request.action === "read" || request.action === "search") {
       const snapshot = await readBoard(valid.cwd, { create: false });
       if (!snapshot.ok) return snapshot;
@@ -837,7 +843,7 @@ export async function executeKanbanToolRequest(
       // Session files can disappear while waiting for the lock, too.
       if (!(await validateSession(projectRoot, actor.sessionId))) return failure("session-missing", "The executing session no longer exists in this project.");
       if (request.action === "comment") {
-        const target = resolveKanbanToolCard(board, request.cardId, actor);
+        const target = resolveKanbanToolCard(board, request.cardId, scoped);
         if (!target.ok) return target;
         cardId = target.card.id;
         written = {
@@ -851,7 +857,7 @@ export async function executeKanbanToolRequest(
         };
         return { board, comments: [{ kind: "add", comment: written }] };
       }
-      const next = applyKanbanToolMutation(board, request as Exclude<typeof request, KanbanToolComment>, actor, now, makeKanbanId());
+      const next = applyKanbanToolMutation(board, request as Exclude<typeof request, KanbanToolComment>, scoped, now, makeKanbanId());
       if (!next.ok) return next;
       cardId = next.cardId;
       return { board: next.board };
