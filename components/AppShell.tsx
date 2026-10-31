@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { createComposerFocus } from "@/lib/composer-focus";
 import { usePrimaryModifier } from "@/hooks/usePrimaryModifier";
 import { useQuickOpen } from "@/hooks/useQuickOpen";
 import { QuickOpen } from "./QuickOpen";
@@ -393,6 +394,24 @@ export function AppShell() {
     reclampRightPanelWidth();
   }, [reclampRightPanelWidth, reclampSidebarWidth, rightPanelOpen]);
   const chatInputRef = useRef<ChatInputHandle | null>(null);
+  // The composer takes the caret whenever the chat becomes the screen the
+  // user is looking at: a session picked in the sidebar, the palette, the
+  // agent switcher or the board; a new session; the board's chat toggle;
+  // the composer-focus chord.
+  //
+  // The rules live in `lib/composer-focus.ts` (the chat does not bring its
+  // field with it: it renders the composer a frame or two later, so the
+  // request waits for it).
+  const isMobileRef = useRef(isMobile);
+  isMobileRef.current = isMobile;
+  const composerFocus = useMemo(() => createComposerFocus({
+    isMobile: () => isMobileRef.current,
+    getTarget: () => chatInputRef.current,
+  }), []);
+  const focusComposerWhenReady = useCallback(() => composerFocus.request(), [composerFocus]);
+  // The chord is an explicit request: it takes the caret even from a field
+  // the user is typing in.
+  const focusComposerForced = useCallback(() => composerFocus.request({ force: true }), [composerFocus]);
   const [pendingQuotePrompt, setPendingQuotePrompt] = useState<{ sessionId: string; text: string } | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
   const mobileToolbarRef = useRef<HTMLDivElement>(null);
@@ -995,6 +1014,10 @@ export function AppShell() {
     // tab's) session on mount must leave a `?board=` view up, or a reload of the
     // board would land back on the chat.
     if (!isRestore) setCenterView("chat");
+    // The chat is the screen the session was picked for, so the composer
+    // takes the caret: the user can type right away, without reaching for
+    // the mouse. A phone is left alone (its keyboard would cover the chat).
+    focusComposerWhenReady();
     // A pick is also the answer to an open top-panel dropdown (the agent
     // switcher): the user chose a session, so the picker closes. The subagent
     // hand-over (handleOpenSubagentParentChat) reopens it after this returns.
@@ -1053,7 +1076,7 @@ export function AppShell() {
     if (!isRestore || new URLSearchParams(window.location.search).get("session") !== session.id) {
       router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
     }
-  }, [activeCwd, changeFileWorkspace, invalidateWorkspaceRestore, router, isMobile, newSessionCwd, selectedSession]);
+  }, [activeCwd, changeFileWorkspace, focusComposerWhenReady, invalidateWorkspaceRestore, router, isMobile, newSessionCwd, selectedSession]);
 
   const handleNewSession = useCallback((sessionId: string, cwd: string, projectKey?: string | null, options?: NewSessionOptions) => {
     invalidateWorkspaceRestore();
@@ -1104,15 +1127,11 @@ export function AppShell() {
     router.replace(`?cwd=${encodeURIComponent(cwd)}`, { scroll: false });
     // The fresh composer takes the caret once it renders (#1313), unless the
     // move came from the new-session bar, whose control keeps focus instead
-    // (newSessionBarFocusRef), or a phone would raise the keyboard for it.
-    // A dialog still open over the page (Ctrl+Alt+N under Settings) keeps it.
-    if (!isMobile && !newSessionBarFocusRef.current) {
-      requestAnimationFrame(() => {
-        if (document.activeElement?.closest("[aria-modal='true']")) return;
-        chatInputRef.current?.focus();
-      });
-    }
-  }, [activeCwd, changeFileWorkspace, invalidateWorkspaceRestore, isMobile, newSessionCwd, router, selectedSession]);
+    // (newSessionBarFocusRef). A phone is left alone (its keyboard would
+    // cover the chat) and a dialog open over the page keeps the focus it
+    // has.
+    if (!newSessionBarFocusRef.current) focusComposerWhenReady();
+  }, [activeCwd, changeFileWorkspace, focusComposerWhenReady, invalidateWorkspaceRestore, isMobile, newSessionCwd, router, selectedSession]);
 
   // Client-built transient SessionInfo (new session / fork) lacks the
   // server-computed projectKey, which the same-project check in
@@ -1614,47 +1633,23 @@ export function AppShell() {
     return inCwd ? workspaceKeyOf(inCwd) : activeCwd;
   }, [activeCwd, selectedSession, sessionCatalog]);
   const quickOpen = useQuickOpen({ sessions: sessionCatalog, projectKey: quickOpenProjectKey });
-  // The composer takes the caret after a session is picked from the palette.
-  //
-  // The chat does not bring its field with it: it mounts, loads the
-  // transcript and renders the composer a frame or two later, so a single
-  // frame's wait finds nothing. The request therefore waits for the field
-  // (at most a second), and it gives up rather than steal a focus the user
-  // has taken in the meantime.
-  const composerFocusRequestRef = useRef(0);
-  const focusComposerWhenReady = useCallback(() => {
-    // A phone is left alone: its keyboard would cover the chat that just
-    // opened.
-    if (isMobile) return;
-    const request = ++composerFocusRequestRef.current;
-    let frames = 0;
-    const tryFocus = (): void => {
-      if (composerFocusRequestRef.current !== request) return;
-      const input = chatInputRef.current;
-      if (input) {
-        composerFocusRequestRef.current = 0;
-        if (document.activeElement?.closest("[aria-modal='true']")) return;
-        input.focus();
-        return;
-      }
-      if (frames++ > 60) {
-        composerFocusRequestRef.current = 0;
-        return;
-      }
-      requestAnimationFrame(tryFocus);
-    };
-    requestAnimationFrame(tryFocus);
-  }, [isMobile]);
   const handleQuickOpenSession = useCallback((session: SessionInfo, options?: { newTab?: boolean }) => {
     if (options?.newTab) {
       window.open(sessionDeepLink(session.id), "_blank", "noopener,noreferrer");
       return;
     }
+    // The composer takes the caret with the pick (handleSelectSession), so a
+    // session chosen in the palette can be typed into right away, without
+    // reaching for the mouse.
     handleSelectSession(session);
-    // The composer takes the caret, so a session picked from the palette can
-    // be typed into right away, without reaching for the mouse.
-    focusComposerWhenReady();
-  }, [focusComposerWhenReady, handleSelectSession]);
+  }, [handleSelectSession]);
+
+  // The composer-focus chord: it brings the chat back when the board covers
+  // it, and puts the caret in the composer wherever the focus was.
+  const handleFocusComposer = useCallback(() => {
+    if (centerView !== "chat") setCenterView("chat");
+    focusComposerForced();
+  }, [centerView, focusComposerForced]);
 
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.). Esc stops the
   // run only while the chat is the screen on show: the board view covers a
@@ -1671,6 +1666,7 @@ export function AppShell() {
     onClosePanelTab: handleCloseActivePanelTab,
     onSelectAdjacentPanelTab: handleSelectAdjacentPanelTab,
     onOpenQuickOpen: quickOpen.openPalette,
+    onFocusComposer: handleFocusComposer,
     isMac,
   });
 
@@ -1779,6 +1775,12 @@ export function AppShell() {
     if (boardHighlightTimerRef.current) clearTimeout(boardHighlightTimerRef.current);
     boardHighlightTimerRef.current = setTimeout(() => setBoardHighlightCardId(null), 2400);
   }, []);
+  // The chat again: the composer takes the caret, so the user can type
+  // straight away after leaving the board.
+  const handleShowChatView = useCallback(() => {
+    setCenterView("chat");
+    focusComposerWhenReady();
+  }, [focusComposerWhenReady]);
   useEffect(() => {
     return () => {
       if (boardHighlightTimerRef.current) clearTimeout(boardHighlightTimerRef.current);
@@ -2671,7 +2673,7 @@ export function AppShell() {
         <button
           type="button"
           onClick={() => {
-            if (centerView === "board") setCenterView("chat");
+            if (centerView === "board") handleShowChatView();
             else if (kanbanContextDir) openKanbanBoardView(kanbanContextDir);
           }}
           disabled={covered || centerView === "board" && !boardProjectDir}
@@ -2712,7 +2714,7 @@ export function AppShell() {
                   if (kanbanContextDir) setBoardProjectDir(kanbanContextDir);
                   setCenterView("board");
                 } else {
-                  setCenterView("chat");
+                  handleShowChatView();
                 }
               }}
               aria-pressed={active}

@@ -30,6 +30,7 @@ import { DismissButton } from "./DismissButton";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useEnterSendMode } from "@/hooks/useEnterSendMode";
 import { useI18n } from "@/hooks/useI18n";
+import { usePrimaryModifier } from "@/hooks/usePrimaryModifier";
 import { useChatAppearance } from "@/hooks/useChatAppearance";
 import { useFontPreferences } from "@/hooks/useFontPreferences";
 import type { ToolPreset } from "@/lib/tool-presets";
@@ -113,6 +114,8 @@ export interface ChatInputHandle {
   rekeyDraft: (previousKey: string, nextKey: string) => void;
   restoreSubmission: (text: string, images?: ChatDraftImage[], targetDraftKey?: string) => void;
   focus: () => void;
+  /** Whether the caret is in the composer right now. */
+  hasFocus: () => boolean;
 }
 
 // "configured" sends no override, so the session follows settings.json defaultTools.
@@ -693,6 +696,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
   compact = false,
 }: Props, ref) {
   const { t } = useI18n();
+  const { label: primaryModifier } = usePrimaryModifier();
   const { fontSize } = useChatAppearance();
   const { ui: uiFontFamily, uiWeight } = useFontPreferences();
   const isMobile = useIsMobile();
@@ -907,6 +911,11 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
       if (!ta) return;
       ta.focus();
       ta.setSelectionRange(ta.value.length, ta.value.length);
+    },
+    // The composer is the screen's one field: a focus request that lands
+    // while it already holds the caret must not move that caret.
+    hasFocus() {
+      return textareaRef.current === document.activeElement;
     },
     insertText(text: string) {
       const ta = textareaRef.current;
@@ -2319,6 +2328,7 @@ export const ChatInput = memo(forwardRef<ChatInputHandle, Props>(function ChatIn
             }}
             onInput={handleInput}
             onPaste={handlePaste}
+            title={compact ? undefined : `${t("composer.focusHint")} (${t("shortcut.focusComposer", { mod: primaryModifier })})`}
             placeholder={
               isCompacting
                 ? t("chat.compactingPlaceholder")
