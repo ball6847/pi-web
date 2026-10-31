@@ -1614,13 +1614,47 @@ export function AppShell() {
     return inCwd ? workspaceKeyOf(inCwd) : activeCwd;
   }, [activeCwd, selectedSession, sessionCatalog]);
   const quickOpen = useQuickOpen({ sessions: sessionCatalog, projectKey: quickOpenProjectKey });
+  // The composer takes the caret after a session is picked from the palette.
+  //
+  // The chat does not bring its field with it: it mounts, loads the
+  // transcript and renders the composer a frame or two later, so a single
+  // frame's wait finds nothing. The request therefore waits for the field
+  // (at most a second), and it gives up rather than steal a focus the user
+  // has taken in the meantime.
+  const composerFocusRequestRef = useRef(0);
+  const focusComposerWhenReady = useCallback(() => {
+    // A phone is left alone: its keyboard would cover the chat that just
+    // opened.
+    if (isMobile) return;
+    const request = ++composerFocusRequestRef.current;
+    let frames = 0;
+    const tryFocus = (): void => {
+      if (composerFocusRequestRef.current !== request) return;
+      const input = chatInputRef.current;
+      if (input) {
+        composerFocusRequestRef.current = 0;
+        if (document.activeElement?.closest("[aria-modal='true']")) return;
+        input.focus();
+        return;
+      }
+      if (frames++ > 60) {
+        composerFocusRequestRef.current = 0;
+        return;
+      }
+      requestAnimationFrame(tryFocus);
+    };
+    requestAnimationFrame(tryFocus);
+  }, [isMobile]);
   const handleQuickOpenSession = useCallback((session: SessionInfo, options?: { newTab?: boolean }) => {
     if (options?.newTab) {
       window.open(sessionDeepLink(session.id), "_blank", "noopener,noreferrer");
       return;
     }
     handleSelectSession(session);
-  }, [handleSelectSession]);
+    // The composer takes the caret, so a session picked from the palette can
+    // be typed into right away, without reaching for the mouse.
+    focusComposerWhenReady();
+  }, [focusComposerWhenReady, handleSelectSession]);
 
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.). Esc stops the
   // run only while the chat is the screen on show: the board view covers a
