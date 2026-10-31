@@ -150,12 +150,11 @@ export function isRightPanelToggleShortcut(event: PanelShortcutEvent, isMac: boo
 }
 
 /**
- * `Cmd/Ctrl+K` or `Cmd/Ctrl+P`: open the Quick Open palette.
+ * `Cmd/Ctrl+P`: open the Quick Open palette.
  *
- * Two chords, one action: `Cmd/Ctrl+K` is the safe one (no browser owns it),
- * `Cmd/Ctrl+P` is the VSCode muscle memory. Chrome owns `Ctrl+P` for printing
- * and a page cannot take that chord back, so the palette is opened by `K`
- * there; `P` still works where the browser lets the page have it.
+ * One chord, VSCode's muscle memory for "go to file". The browser owns
+ * `Ctrl+P` for printing, and a page can take that chord back: the handler
+ * stops the default on every press, so the browser never prints.
  *
  * `Alt` is refused, because Windows reports AltGr as Ctrl+Alt and an AltGr
  * combination that types a character is the user's text. `Shift` is refused
@@ -164,8 +163,7 @@ export function isRightPanelToggleShortcut(event: PanelShortcutEvent, isMac: boo
 export function isQuickOpenShortcut(event: PanelShortcutEvent, isMac: boolean): boolean {
   if (event.altKey || event.shiftKey) return false;
   if (!hasPrimaryModifier(event, isMac)) return false;
-  const key = event.key.toLowerCase();
-  return key === "k" || key === "p";
+  return event.key.toLowerCase() === "p";
 }
 
 /**
@@ -332,7 +330,7 @@ interface UseGlobalKeyboardShortcutsOptions {
  *   Cmd/Ctrl+Shift+B – toggle the right panel
  *   Cmd/Ctrl+Alt+Enter – the right panel's full-width mode
  *   Ctrl+`       – toggle the terminal
- *   Cmd/Ctrl+K   – open the Quick Open palette (Cmd/Ctrl+P too)
+ *   Cmd/Ctrl+P   – open the Quick Open palette
  *
  * Note: Esc inside <textarea> or <input> is deliberately NOT handled here.
  * ChatInput manages its own Esc logic (closing slash / @ file menus, stopping

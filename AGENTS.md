@@ -273,7 +273,7 @@ hooks/
                            the panel toggles (Cmd/Ctrl+B sidebar, Cmd/Ctrl+Shift+B right panel,
                            Cmd/Ctrl+Alt+Enter full width, Ctrl+` terminal);
                            the tab strip's chords (Alt+W close, Alt+Shift+[ / Alt+Shift+] switch);
-                           the Quick Open palette's chord (Cmd/Ctrl+K, Cmd/Ctrl+P)
+                           the Quick Open palette's chord (Cmd/Ctrl+P)
   useQuickOpen.ts          the Quick Open palette's state: the query, the scope, the selected row, the hits
   useResizablePanel.ts     drag/keyboard panel size kept per key; persistClamp: false never saves a short window's clamp
   usePrismLanguages.ts     true once the Prism languages are loaded; starts the load for a highlighter

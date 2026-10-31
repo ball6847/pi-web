@@ -1885,7 +1885,6 @@ export const zhCNLocale: LocalePlugin = {
     "kanban.loadFailed": "无法加载或保存看板。",
     "kanban.retry": "重试",
     "quickOpen.label": "快速打开",
-    "quickOpen.heading": "会话",
     "quickOpen.placeholder": "按标题搜索会话……",
     "quickOpen.scopeAll": "所有项目",
     "quickOpen.scopeProject": "当前项目",

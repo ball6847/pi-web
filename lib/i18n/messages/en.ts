@@ -1886,7 +1886,6 @@ export const enLocale: LocalePlugin = {
     "kanban.loadFailed": "Couldn't load or save the board.",
     "kanban.retry": "Retry",
     "quickOpen.label": "Quick Open",
-    "quickOpen.heading": "Sessions",
     "quickOpen.placeholder": "Search sessions by title...",
     "quickOpen.scopeAll": "all projects",
     "quickOpen.scopeProject": "this project",

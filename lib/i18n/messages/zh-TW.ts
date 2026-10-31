@@ -1886,7 +1886,6 @@ export const zhTWLocale: LocalePlugin = {
     "kanban.loadFailed": "無法載入或儲存看板。",
     "kanban.retry": "重試",
     "quickOpen.label": "快速開啟",
-    "quickOpen.heading": "對話",
     "quickOpen.placeholder": "依標題搜尋對話……",
     "quickOpen.scopeAll": "所有專案",
     "quickOpen.scopeProject": "目前專案",

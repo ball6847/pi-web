@@ -150,6 +150,7 @@ export function QuickOpen({
         aria-selected={selected}
         data-index={index}
         className={`quick-open-row${selected ? " is-selected" : ""}`}
+        title={`${t("quickOpen.messageCount", { count: session.messageCount })} · ${formatRelativeTime(session.modified, locale)}`}
         onClick={() => onOpen(hit)}
         onMouseMove={() => {
           if (selectedIndex !== index) onSelectedIndexChange(index);
@@ -159,29 +160,25 @@ export function QuickOpen({
           <span className="quick-open-row-title">
             <Highlighted text={title.text} positions={title.positions} />
           </span>
-          <span className="quick-open-row-sub">
-            <span className="quick-open-row-project">{hit.candidate.projectName}</span>
-            {hit.messagePositions.length > 0 && (
-              <>
-                <span className="quick-open-row-dot">·</span>
-                <span className="quick-open-row-snippet">
-                  <Highlighted
-                    text={quickOpenTitleWindow(hit.candidate.message, hit.messagePositions, 60).text}
-                    positions={quickOpenTitleWindow(hit.candidate.message, hit.messagePositions, 60).positions}
-                  />
-                </span>
-              </>
-            )}
-          </span>
+          {hit.messagePositions.length > 0 && (
+            <span className="quick-open-row-sub">
+              <Highlighted
+                text={quickOpenTitleWindow(hit.candidate.message, hit.messagePositions, 60).text}
+                positions={quickOpenTitleWindow(hit.candidate.message, hit.messagePositions, 60).positions}
+              />
+            </span>
+          )}
         </span>
         <span className="quick-open-row-meta">
           {isAwaiting && <span className="quick-open-badge is-awaiting">{t("quickOpen.awaiting")}</span>}
           {isRunning && !isAwaiting && <span className="quick-open-badge is-running">{t("quickOpen.running")}</span>}
           {isUnread && !isRunning && <span className="quick-open-badge is-unread">{t("quickOpen.unread")}</span>}
+          <span className="quick-open-row-project" title={hit.candidate.projectName}>
+            {hit.candidate.projectName}
+          </span>
           <span className="quick-open-row-time" title={formatRelativeTime(session.modified, locale)}>
             {formatShortRelativeTime(session.modified, locale)}
           </span>
-          <span className="quick-open-row-count">{t("quickOpen.messageCount", { count: session.messageCount })}</span>
         </span>
       </button>
     );
@@ -200,19 +197,8 @@ export function QuickOpen({
       }}
     >
       <div className="quick-open-panel">
-        <div className="quick-open-header">
-          <span className="quick-open-heading">{t("quickOpen.heading")}</span>
-          <button
-            type="button"
-            className="quick-open-scope"
-            onClick={() => onScopeChange(scope === "all" ? "project" : "all")}
-            title={t("quickOpen.scopeHint")}
-          >
-            {scope === "all" ? t("quickOpen.scopeAll") : t("quickOpen.scopeProject")}
-          </button>
-        </div>
         <div className="quick-open-input-row">
-          <svg className="quick-open-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+          <svg className="quick-open-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <circle cx="11" cy="11" r="7" />
             <path d="m20 20-3.5-3.5" />
           </svg>
@@ -251,6 +237,14 @@ export function QuickOpen({
               }
             }}
           />
+          <button
+            type="button"
+            className="quick-open-scope"
+            onClick={() => onScopeChange(scope === "all" ? "project" : "all")}
+            title={t("quickOpen.scopeHint")}
+          >
+            {scope === "all" ? t("quickOpen.scopeAll") : t("quickOpen.scopeProject")}
+          </button>
         </div>
         <div
           id="quick-open-list"
@@ -277,7 +271,7 @@ export function QuickOpen({
         <div className="quick-open-footer">
           <span><kbd>↑</kbd><kbd>↓</kbd>{t("quickOpen.hintNavigate")}</span>
           <span><kbd>↵</kbd>{t("quickOpen.hintOpen")}</span>
-          <span><kbd>{modifierLabel}</kbd><kbd>↵</kbd>{t("quickOpen.hintNewTab")}</span>
+          <span className="quick-open-footer-hint-new-tab"><kbd>{modifierLabel}</kbd><kbd>↵</kbd>{t("quickOpen.hintNewTab")}</span>
           <span><kbd>esc</kbd>{t("quickOpen.hintClose")}</span>
           <span className="quick-open-count">{t("quickOpen.count", { count: hits.length })}</span>
         </div>
