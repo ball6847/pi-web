@@ -19,17 +19,22 @@ export function isMacPlatform(userAgent: string | null | undefined): boolean {
   return /\bMacintosh\b|\bMac OS X\b/.test(userAgent);
 }
 
-/** The label for that modifier: `⌘` on macOS, `Ctrl` everywhere else. */
+/**
+ * The label for that modifier: `⌘` on macOS, `ctrl` everywhere else.
+ *
+ * Shortcut text is written all lowercase (`ctrl`, `alt`, `shift`, `esc`), so a
+ * key label reads the same in a tooltip, a hint row and a footer.
+ */
 export function primaryModifierLabel(isMac: boolean): string {
-  return isMac ? "⌘" : "Ctrl";
+  return isMac ? "⌘" : "ctrl";
 }
 
 /**
- * The label for the secondary modifier: `⌥` (Option) on macOS, `Alt`
+ * The label for the secondary modifier: `⌥` (Option) on macOS, `alt`
  * everywhere else.
  */
 export function altModifierLabel(isMac: boolean): string {
-  return isMac ? "⌥" : "Alt";
+  return isMac ? "⌥" : "alt";
 }
 
 /** The user agent of this browser, read once and kept (null on the server). */
