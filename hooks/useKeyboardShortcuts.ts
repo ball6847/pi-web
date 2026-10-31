@@ -150,6 +150,25 @@ export function isRightPanelToggleShortcut(event: PanelShortcutEvent, isMac: boo
 }
 
 /**
+ * `Cmd/Ctrl+K` or `Cmd/Ctrl+P`: open the Quick Open palette.
+ *
+ * Two chords, one action: `Cmd/Ctrl+K` is the safe one (no browser owns it),
+ * `Cmd/Ctrl+P` is the VSCode muscle memory. Chrome owns `Ctrl+P` for printing
+ * and a page cannot take that chord back, so the palette is opened by `K`
+ * there; `P` still works where the browser lets the page have it.
+ *
+ * `Alt` is refused, because Windows reports AltGr as Ctrl+Alt and an AltGr
+ * combination that types a character is the user's text. `Shift` is refused
+ * too: `Cmd/Ctrl+Shift+P` belongs to the browser (the developer tools).
+ */
+export function isQuickOpenShortcut(event: PanelShortcutEvent, isMac: boolean): boolean {
+  if (event.altKey || event.shiftKey) return false;
+  if (!hasPrimaryModifier(event, isMac)) return false;
+  const key = event.key.toLowerCase();
+  return key === "k" || key === "p";
+}
+
+/**
  * `Cmd+Alt+Enter` on macOS, `Ctrl+Alt+Enter` elsewhere: the right panel's
  * full-width mode.
  *
@@ -270,6 +289,8 @@ interface UseGlobalKeyboardShortcutsOptions {
   onClosePanelTab?: () => void;
   /** Called when the right panel should show its next or previous tab. */
   onSelectAdjacentPanelTab?: (direction: PanelTabDirection) => void;
+  /** Called when the Quick Open palette's chord is pressed. */
+  onOpenQuickOpen?: () => void;
   /**
    * Whether the platform's primary modifier is `Cmd` (macOS) rather than
    * `Ctrl` (Windows, Linux). The platform toggles follow it, so a chord
@@ -298,6 +319,7 @@ interface UseGlobalKeyboardShortcutsOptions {
  *   Cmd/Ctrl+Shift+B – toggle the right panel
  *   Cmd/Ctrl+Alt+Enter – the right panel's full-width mode
  *   Ctrl+`       – toggle the terminal
+ *   Cmd/Ctrl+K   – open the Quick Open palette (Cmd/Ctrl+P too)
  *
  * Note: Esc inside <textarea> or <input> is deliberately NOT handled here.
  * ChatInput manages its own Esc logic (closing slash / @ file menus, stopping
@@ -318,6 +340,7 @@ export function useGlobalKeyboardShortcuts(
     onToggleRightPanelFullscreen,
     onClosePanelTab,
     onSelectAdjacentPanelTab,
+    onOpenQuickOpen,
     isMac = false,
   } = options;
 
@@ -356,6 +379,16 @@ export function useGlobalKeyboardShortcuts(
         return;
       }
 
+      // ---- Quick Open: the palette over the whole page ----
+      if (isQuickOpenShortcut(e, isMac)) {
+        if (!onOpenQuickOpen) return;
+        // A modal owns the screen: the palette would open over it.
+        if (isInsideModal(e)) return;
+        e.preventDefault();
+        onOpenQuickOpen();
+        return;
+      }
+
       // ---- Panel toggles: sidebar, right panel, terminal ----
       // The terminal is checked first: it is the only chord that carries no
       // letter, so it cannot be mistaken for the other two.
@@ -390,5 +423,5 @@ export function useGlobalKeyboardShortcuts(
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeCwd, escapeStopsAgent, isMac, onClosePanelTab, onNewSession, onSelectAdjacentPanelTab, onToggleRightPanel, onToggleRightPanelFullscreen, onToggleSidebar, onToggleTerminal]);
+  }, [activeCwd, escapeStopsAgent, isMac, onClosePanelTab, onNewSession, onOpenQuickOpen, onSelectAdjacentPanelTab, onToggleRightPanel, onToggleRightPanelFullscreen, onToggleSidebar, onToggleTerminal]);
 }

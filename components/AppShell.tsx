@@ -4,6 +4,9 @@ import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } fr
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { usePrimaryModifier } from "@/hooks/usePrimaryModifier";
+import { useQuickOpen } from "@/hooks/useQuickOpen";
+import { QuickOpen } from "./QuickOpen";
+import { sessionDeepLink } from "@/lib/session-links";
 import { SessionSidebar, type SelectSessionOptions, type SessionSidebarControl } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { NewSessionContextBar, type NewSessionContextControl } from "./NewSessionContextBar";
@@ -1601,6 +1604,24 @@ export function AppShell() {
     );
   }, [selectedSession]);
 
+  // The Quick Open palette: every session of the catalogue, ranked by how
+  // well it matches what is typed. The scope is every project by default: the
+  // palette exists to find a session without knowing which project it is in.
+  const quickOpenProjectKey = useMemo(() => {
+    if (selectedSession) return workspaceKeyOf(selectedSession);
+    if (!activeCwd) return null;
+    const inCwd = sessionCatalog.find((session) => session.cwd === activeCwd);
+    return inCwd ? workspaceKeyOf(inCwd) : activeCwd;
+  }, [activeCwd, selectedSession, sessionCatalog]);
+  const quickOpen = useQuickOpen({ sessions: sessionCatalog, projectKey: quickOpenProjectKey });
+  const handleQuickOpenSession = useCallback((session: SessionInfo, options?: { newTab?: boolean }) => {
+    if (options?.newTab) {
+      window.open(sessionDeepLink(session.id), "_blank", "noopener,noreferrer");
+      return;
+    }
+    handleSelectSession(session);
+  }, [handleSelectSession]);
+
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.). Esc stops the
   // run only while the chat is the screen on show: the board view covers a
   // still mounted ChatWindow, whose abort handler would otherwise stop the
@@ -1615,6 +1636,7 @@ export function AppShell() {
     onToggleRightPanelFullscreen: handleRightPanelExpandToggle,
     onClosePanelTab: handleCloseActivePanelTab,
     onSelectAdjacentPanelTab: handleSelectAdjacentPanelTab,
+    onOpenQuickOpen: quickOpen.openPalette,
     isMac,
   });
 
@@ -3577,6 +3599,27 @@ export function AppShell() {
         onProjectTrustChanged={handleProjectTrustChanged}
       />
     )}
+    {/* The Quick Open palette, over the page: it is portaled to the body, so
+        it is not bound to the sidebar's layout. */}
+    <QuickOpen
+      open={quickOpen.open}
+      query={quickOpen.query}
+      onQueryChange={quickOpen.setQuery}
+      scope={quickOpen.scope}
+      onScopeChange={quickOpen.setScope}
+      hits={quickOpen.hits}
+      groups={quickOpen.groups}
+      selectedIndex={quickOpen.selectedIndex}
+      onSelectedIndexChange={quickOpen.setSelectedIndex}
+      onOpen={(hit, options) => {
+        handleQuickOpenSession(hit.candidate.session, options);
+        quickOpen.closePalette();
+      }}
+      onClose={quickOpen.closePalette}
+      runningIds={runningSessionIds}
+      awaitingIds={awaitingInputSessionIds}
+      unreadIds={unreadSessionIds}
+    />
     {/* After Settings, so it opens above it (z-index 1100 over 1000) when Settings › MCP asks for it. */}
     {projectTrustDialogOpen && projectTrustCwd && (
       <ProjectTrustDialog
