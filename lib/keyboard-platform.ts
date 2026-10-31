@@ -24,6 +24,14 @@ export function primaryModifierLabel(isMac: boolean): string {
   return isMac ? "⌘" : "Ctrl";
 }
 
+/**
+ * The label for the secondary modifier: `⌥` (Option) on macOS, `Alt`
+ * everywhere else.
+ */
+export function altModifierLabel(isMac: boolean): string {
+  return isMac ? "⌥" : "Alt";
+}
+
 /** The user agent of this browser, read once and kept (null on the server). */
 let cachedUserAgent: string | null | undefined;
 

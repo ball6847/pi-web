@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useI18n } from "@/hooks/useI18n";
 import { usePrimaryModifier } from "@/hooks/usePrimaryModifier";
+import { altModifierLabel } from "@/lib/keyboard-platform";
 import { formatRelativeTime, formatShortRelativeTime } from "@/lib/i18n/format";
 import { quickOpenTitleWindow, type QuickOpenGroup, type QuickOpenHit, type QuickOpenScope } from "@/lib/quick-open";
 
@@ -195,6 +196,25 @@ export function QuickOpen({
         // A click on the backdrop closes the palette; a click inside does not.
         if (event.target === event.currentTarget) onClose();
       }}
+      onKeyDown={(event) => {
+        // Alt+j / Alt+k move the selection: vim's j and k without leaving the
+        // field, so the query is still being typed. The keydown bubbles out
+        // of the input, which is where the caret is.
+        //
+        // A Windows layout's AltGr reports Ctrl+Alt as well, and it is there
+        // to type a character (`AltGr+j` writes `€`), so it is left alone.
+        if (!event.altKey || event.ctrlKey || event.metaKey) return;
+        if (typeof event.getModifierState === "function" && event.getModifierState("AltGraph")) return;
+        if (event.key === "j") {
+          event.preventDefault();
+          move(1);
+          return;
+        }
+        if (event.key === "k") {
+          event.preventDefault();
+          move(-1);
+        }
+      }}
     >
       <div className="quick-open-panel">
         <div className="quick-open-input-row">
@@ -269,7 +289,7 @@ export function QuickOpen({
           )}
         </div>
         <div className="quick-open-footer">
-          <span><kbd>↑</kbd><kbd>↓</kbd>{t("quickOpen.hintNavigate")}</span>
+          <span><kbd>{altModifierLabel(isMac)}</kbd><kbd>j</kbd><kbd>{altModifierLabel(isMac)}</kbd><kbd>k</kbd>{t("quickOpen.hintNavigate")}</span>
           <span><kbd>↵</kbd>{t("quickOpen.hintOpen")}</span>
           <span className="quick-open-footer-hint-new-tab"><kbd>{modifierLabel}</kbd><kbd>↵</kbd>{t("quickOpen.hintNewTab")}</span>
           <span><kbd>esc</kbd>{t("quickOpen.hintClose")}</span>
