@@ -4,6 +4,9 @@ import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } fr
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { usePrimaryModifier } from "@/hooks/usePrimaryModifier";
+import { useQuickOpen } from "@/hooks/useQuickOpen";
+import { QuickOpen } from "./QuickOpen";
+import { sessionDeepLink } from "@/lib/session-links";
 import { SessionSidebar, type SelectSessionOptions, type SessionSidebarControl } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { NewSessionContextBar, type NewSessionContextControl } from "./NewSessionContextBar";
@@ -1601,6 +1604,58 @@ export function AppShell() {
     );
   }, [selectedSession]);
 
+  // The Quick Open palette: every session of the catalogue, ranked by how
+  // well it matches what is typed. The scope is every project by default: the
+  // palette exists to find a session without knowing which project it is in.
+  const quickOpenProjectKey = useMemo(() => {
+    if (selectedSession) return workspaceKeyOf(selectedSession);
+    if (!activeCwd) return null;
+    const inCwd = sessionCatalog.find((session) => session.cwd === activeCwd);
+    return inCwd ? workspaceKeyOf(inCwd) : activeCwd;
+  }, [activeCwd, selectedSession, sessionCatalog]);
+  const quickOpen = useQuickOpen({ sessions: sessionCatalog, projectKey: quickOpenProjectKey });
+  // The composer takes the caret after a session is picked from the palette.
+  //
+  // The chat does not bring its field with it: it mounts, loads the
+  // transcript and renders the composer a frame or two later, so a single
+  // frame's wait finds nothing. The request therefore waits for the field
+  // (at most a second), and it gives up rather than steal a focus the user
+  // has taken in the meantime.
+  const composerFocusRequestRef = useRef(0);
+  const focusComposerWhenReady = useCallback(() => {
+    // A phone is left alone: its keyboard would cover the chat that just
+    // opened.
+    if (isMobile) return;
+    const request = ++composerFocusRequestRef.current;
+    let frames = 0;
+    const tryFocus = (): void => {
+      if (composerFocusRequestRef.current !== request) return;
+      const input = chatInputRef.current;
+      if (input) {
+        composerFocusRequestRef.current = 0;
+        if (document.activeElement?.closest("[aria-modal='true']")) return;
+        input.focus();
+        return;
+      }
+      if (frames++ > 60) {
+        composerFocusRequestRef.current = 0;
+        return;
+      }
+      requestAnimationFrame(tryFocus);
+    };
+    requestAnimationFrame(tryFocus);
+  }, [isMobile]);
+  const handleQuickOpenSession = useCallback((session: SessionInfo, options?: { newTab?: boolean }) => {
+    if (options?.newTab) {
+      window.open(sessionDeepLink(session.id), "_blank", "noopener,noreferrer");
+      return;
+    }
+    handleSelectSession(session);
+    // The composer takes the caret, so a session picked from the palette can
+    // be typed into right away, without reaching for the mouse.
+    focusComposerWhenReady();
+  }, [focusComposerWhenReady, handleSelectSession]);
+
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.). Esc stops the
   // run only while the chat is the screen on show: the board view covers a
   // still mounted ChatWindow, whose abort handler would otherwise stop the
@@ -1615,6 +1670,7 @@ export function AppShell() {
     onToggleRightPanelFullscreen: handleRightPanelExpandToggle,
     onClosePanelTab: handleCloseActivePanelTab,
     onSelectAdjacentPanelTab: handleSelectAdjacentPanelTab,
+    onOpenQuickOpen: quickOpen.openPalette,
     isMac,
   });
 
@@ -3577,6 +3633,28 @@ export function AppShell() {
         onProjectTrustChanged={handleProjectTrustChanged}
       />
     )}
+    {/* The Quick Open palette, over the page: it is portaled to the body, so
+        it is not bound to the sidebar's layout. */}
+    <QuickOpen
+      open={quickOpen.open}
+      query={quickOpen.query}
+      onQueryChange={quickOpen.setQuery}
+      scope={quickOpen.scope}
+      onScopeChange={quickOpen.setScope}
+      hits={quickOpen.hits}
+      groups={quickOpen.groups}
+      selectedIndex={quickOpen.selectedIndex}
+      onSelectedIndexChange={quickOpen.setSelectedIndex}
+      focusToken={quickOpen.focusToken}
+      onOpen={(hit, options) => {
+        handleQuickOpenSession(hit.candidate.session, options);
+        quickOpen.closePalette();
+      }}
+      onClose={quickOpen.closePalette}
+      runningIds={runningSessionIds}
+      awaitingIds={awaitingInputSessionIds}
+      unreadIds={unreadSessionIds}
+    />
     {/* After Settings, so it opens above it (z-index 1100 over 1000) when Settings › MCP asks for it. */}
     {projectTrustDialogOpen && projectTrustCwd && (
       <ProjectTrustDialog
