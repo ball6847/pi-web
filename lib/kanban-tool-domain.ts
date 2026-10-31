@@ -23,7 +23,17 @@ export type KanbanToolSearch = Extract<KanbanToolRequest, { action: "search" }>;
 /** Board edits: the shared reducers' business. A comment is not a board row. */
 export type KanbanToolMutation = Extract<KanbanToolRequest, { action: "create" | "update" }>;
 export type KanbanToolComment = Extract<KanbanToolRequest, { action: "comment" }>;
-export type KanbanToolActor = { sessionId: string; sessionTitle?: string | null };
+export type KanbanToolActor = {
+  sessionId: string;
+  sessionTitle?: string | null;
+  /**
+   * The session that delegated this work — a subagent run's caller
+   * (`readSessionDelegatedFrom`). Filled by the store, never by the caller of
+   * the tool: a model cannot claim a delegation it was not given. A delegated
+   * session may act on its caller's card, and only the ways a helper may.
+   */
+  delegatedFrom?: string | null;
+};
 export type KanbanToolFailure = { ok: false; code: KanbanFailureCode | "invalid-request" | "read-only"; error: string };
 // Mapped data types also satisfy Pi's JsonValue contract (interfaces have no index signature).
 // A card the tool sends carries its `key` too: the handle people use (`PIW-42`).
@@ -172,17 +182,21 @@ export function resolveKanbanToolCard(
   board: KanbanBoard,
   cardId: string | undefined,
   actor: KanbanToolActor,
-): { ok: true; card: KanbanCard } | (KanbanToolFailure & { code: "refused" }) {
+): { ok: true; card: KanbanCard; delegated: boolean } | (KanbanToolFailure & { code: "refused" }) {
   const card = cardId === undefined ? cardForSession(board, actor.sessionId) : resolveKanbanCardRef(board, cardId);
   if (!card) {
     return refused(cardId === undefined
       ? "This session has no linked card. Read the board, then specify cardId and a work laneId to claim a free card."
       : "Card not found in this project's board. Use its key (like PIW-42), an id from kanban read, or search to discover current cards.");
   }
-  if (card.sessionId !== null && card.sessionId !== actor.sessionId) {
+  // A delegated session reaches its caller's card only by naming it: the
+  // cardId-less default always stays this session's own card, so "your card"
+  // never means two things.
+  const delegated = card.sessionId !== null && card.sessionId !== actor.sessionId;
+  if (delegated && card.sessionId !== actor.delegatedFrom) {
     return refused(`Card "${kanbanCardKey(board, card)}" belongs to another session. Choose an unlinked card; links cannot be stolen.`);
   }
-  return { ok: true, card };
+  return { ok: true, card, delegated };
 }
 
 /** Pure guarded patch/claim/move. The caller supplies identity/time; never silently drops another link. */
@@ -214,6 +228,20 @@ export function applyKanbanToolMutation(
   const lane = board.lanes.find((l) => l.id === (request.laneId ?? card.laneId));
   if (!lane) return refused("Lane not found. Use kanban read to discover the current lane IDs.");
   if (lane.fixed && card.sessionId !== null) return refused("A linked card cannot enter Backlog. Keep it in a work lane; create independent tasks in Backlog.");
+  // A helper's powers are deliberately narrow: no text, and no going back. The
+  // owner keeps the card's words and its direction; a helper that disagrees
+  // with a lane says so in a comment instead of racing the owner.
+  if (resolved.delegated) {
+    const key = kanbanCardKey(board, card);
+    if (request.title !== undefined || request.description !== undefined) {
+      return refused(`Card "${key}" belongs to the session that delegated to you: comment on it or move it forward, and leave its title and description to its owner.`);
+    }
+    const from = board.lanes.findIndex((l) => l.id === card.laneId);
+    const to = board.lanes.findIndex((l) => l.id === lane.id);
+    if (to < from) {
+      return refused(`A delegated session may move card "${key}" forward only (next lane: ${board.lanes[from + 1]?.id ?? "none"}). Comment instead of moving it back.`);
+    }
+  }
   const claiming = request.laneId !== undefined && !lane.fixed && card.sessionId === null;
   if (claiming && current) return refused(`This session already owns card "${kanbanCardKey(board, current)}". Update that card instead of claiming another.`);
   const title = request.title === undefined ? card.title : request.title.trim();

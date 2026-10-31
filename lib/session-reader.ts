@@ -2,7 +2,7 @@ import {
   SessionManager,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import { closeSync, type Dirent, fstatSync, openSync, readSync, statSync } from "fs";
+import { closeSync, existsSync, type Dirent, fstatSync, openSync, readSync, statSync } from "fs";
 import { readdir } from "fs/promises";
 import { isAbsolute, join, normalize as normalizePath, relative, resolve as resolvePath, sep } from "path";
 import type { AgentMessage, ImageContent, SessionEntry, SessionHeader, SessionInfo, SessionContext } from "./types";
@@ -612,6 +612,31 @@ export async function resolveSessionIdByPath(filePath: string): Promise<string |
 
   await listAllSessions();
   return getPathToIdCache().get(pathKey);
+}
+
+/**
+ * The session that delegated this one: the caller pi-web records in the subagent
+ * meta entry, which sits among a child's first entries. A fork carries a
+ * `parentSession` header but no meta entry, so a fork is not a delegation: a
+ * fork is a peer a person made, and it inherits nothing here.
+ *
+ * One bounded head read. Null for a session with no caller, or one whose file is
+ * gone.
+ */
+export async function readSessionDelegatedFrom(sessionId: string): Promise<string | null> {
+  if (typeof sessionId !== "string" || !sessionId) return null;
+  try {
+    let path = await resolveSessionPath(sessionId);
+    // A path cached before the file was deleted points at nothing: look again from the disk.
+    if (path && !existsSync(path)) {
+      invalidateSessionPathCache(sessionId);
+      path = await resolveSessionPath(sessionId);
+    }
+    if (!path || !existsSync(path)) return null;
+    return readSubagentRun(readSessionRelationEntries(path), sessionId, path)?.parentSessionId ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export function cacheSessionPath(sessionId: string, filePath: string): void {
