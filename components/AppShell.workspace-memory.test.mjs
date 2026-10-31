@@ -39,6 +39,7 @@ test("a linked session that is gone gets no other session in its place (#1168)",
         clearLastOpen() {},
         workspaceKeyOf: (value) => value.projectKey ?? value.cwd,
         useCallback: (callback) => callback,
+        focusComposerWhenReady() {},
         changeFileWorkspace() {},
         activeNewSessionDraftKeyRef: { current: null },
         activeProjectKeyRef: { current: null },
@@ -116,6 +117,7 @@ test("New restores the draft after session navigation and workspace auto-restore
         clearLastOpen() {},
         workspaceKeyOf: (value) => value.projectKey ?? value.cwd,
         useCallback: (callback) => callback,
+        focusComposerWhenReady() {},
         useGlobalKeyboardShortcuts() {},
     centerView: "chat",
         activeNewSessionDraftKeyRef: { current: `new:initial:${cwd}` },
@@ -226,6 +228,7 @@ test("New in another project adopts it up front and parks the composer's draft",
     clearLastOpen() {},
     workspaceKeyOf: (value) => value.projectKey ?? value.cwd,
     useCallback: (callback) => callback,
+    focusComposerWhenReady() {},
     useGlobalKeyboardShortcuts() {},
     centerView: "chat",
     activeNewSessionDraftKeyRef: { current: "new:first:/p1" },
@@ -313,6 +316,7 @@ test("the composer's bar moves the fresh composer's draft and model picks instea
     clearLastOpen() {},
     workspaceKeyOf: (value) => value.projectKey ?? value.cwd,
     useCallback: (callback) => callback,
+    focusComposerWhenReady() {},
     useGlobalKeyboardShortcuts() {},
     centerView: "chat",
     activeNewSessionDraftKeyRef: { current: "new:first:/p1" },
@@ -411,6 +415,7 @@ test("the bar of the new composer shows the bar's own move until the sidebar rep
   const context = vm.createContext({
     Error,
     useCallback: (callback) => callback,
+    focusComposerWhenReady() {},
     newSessionMoveRef: { current: null },
     newSessionBarFocusRef: { current: null },
     sidebarControlRef: {
@@ -473,7 +478,6 @@ test("a new session puts the caret in the fresh composer on desktop only (#1313)
     callbackBody("handleSelectSession", "handleNewSession"),
     callbackBody("handleNewSession", "hydrateSelectedSession"),
   ].join("\n");
-  const frames = [];
   const focused = [];
   const context = vm.createContext({
     ...draftStore,
@@ -486,6 +490,9 @@ test("a new session puts the caret in the fresh composer on desktop only (#1313)
     clearLastOpen() {},
     workspaceKeyOf: (value) => value.projectKey ?? value.cwd,
     useCallback: (callback) => callback,
+    // The caret request itself (the wait for the field, the phone, the
+    // dialog) lives in `lib/composer-focus.ts`, with its own test.
+    focusComposerWhenReady: () => focused.push("composer"),
     useGlobalKeyboardShortcuts() {},
     activeNewSessionDraftKeyRef: { current: "new:first:/p1" },
     activeProjectKeyRef: { current: "/p1" },
@@ -493,10 +500,10 @@ test("a new session puts the caret in the fresh composer on desktop only (#1313)
     suppressCwdBumpRef: { current: false },
     skipWorkspaceRestoreRef: { current: false },
     branchLeafChangeFnRef: { current: null },
-    chatInputRef: { current: { focus: () => focused.push("composer"), rekeyDraft: () => {} } },
+    chatInputRef: { current: { focus: () => {}, rekeyDraft: () => {} } },
     newSessionBarFocusRef: { current: null },
     newSessionChoicesRef: { current: null },
-    requestAnimationFrame: (cb) => frames.push(cb),
+    requestAnimationFrame: (cb) => cb(),
     document: { activeElement: null },
     // handleNewSession reads it for the covered-chat Escape rule (kanban);
     // the fresh composer is on the chat, not the board.
@@ -524,25 +531,11 @@ test("a new session puts the caret in the fresh composer on desktop only (#1313)
 
   // Ctrl+Alt+N: the fresh composer takes the caret once it renders.
   context.navigate.handleNewSession("kb-1", "/p1");
-  assert.equal(frames.length, 1);
-  frames.splice(0).forEach((cb) => cb());
   assert.deepEqual(focused, ["composer"]);
-
-  // A dialog still open over the page (Settings) keeps the focus.
-  context.document.activeElement = { closest: (selector) => selector === "[aria-modal='true']" ? {} : null };
-  context.navigate.handleNewSession("kb-dialog", "/p1");
-  frames.splice(0).forEach((cb) => cb());
-  assert.deepEqual(focused, ["composer"]);
-  context.document.activeElement = null;
 
   // The bar's move keeps its control, so no caret request is made for it.
   context.newSessionBarFocusRef.current = "worktree";
   context.navigate.handleNewSession("p2-new", "/p2", "/p2-key", { carryComposer: true });
-  assert.equal(frames.length, 0);
+  assert.deepEqual(focused, ["composer"]);
   context.newSessionBarFocusRef.current = null;
-
-  // A phone never raises the keyboard uninvited.
-  context.isMobile = true;
-  context.navigate.handleNewSession("kb-2", "/p1");
-  assert.equal(frames.length, 0);
 });
