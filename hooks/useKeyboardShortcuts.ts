@@ -254,6 +254,19 @@ function isInsideModal(event: KeyboardEvent): boolean {
 }
 
 /**
+ * Whether the key was pressed inside the Quick Open palette.
+ *
+ * The palette is a modal of its own, so `isInsideModal()` cannot tell it
+ * apart from Settings or the trust dialog: the palette answers its own chord
+ * (it takes the key again and focuses its field), the other modals do not.
+ */
+function isInsideQuickOpen(event: KeyboardEvent): boolean {
+  const target = event.target as HTMLElement | null;
+  if (!target || typeof target.closest !== "function") return false;
+  return target.closest("[data-quick-open]") !== null;
+}
+
+/**
  * Whether the key was typed into a text field (the composer, a settings
  * input), where the panel's own chords must not swallow the text: `Alt+W`
  * types `∑` on macOS and `Alt+Shift+[` types `{`.
@@ -382,9 +395,18 @@ export function useGlobalKeyboardShortcuts(
       // ---- Quick Open: the palette over the whole page ----
       if (isQuickOpenShortcut(e, isMac)) {
         if (!onOpenQuickOpen) return;
-        // A modal owns the screen: the palette would open over it.
-        if (isInsideModal(e)) return;
+        // The chord is ours, and it is taken from the browser: `Cmd/Ctrl+P`
+        // prints and `Cmd/Ctrl+K` opens the browser's own search, and both
+        // must not happen while the palette has them. So the default is
+        // stopped first, every time — including a second press with the
+        // palette already open, which is where the browser used to get them.
         e.preventDefault();
+        // Another modal (Settings, the trust dialog) owns the screen: the
+        // palette would open over it. The key is still ours, so it stays
+        // swallowed.
+        if (isInsideModal(e) && !isInsideQuickOpen(e)) return;
+        // The palette is already open: this takes the key again and puts the
+        // caret back in its field, without losing what was typed.
         onOpenQuickOpen();
         return;
       }

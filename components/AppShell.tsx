@@ -3611,6 +3611,7 @@ export function AppShell() {
       groups={quickOpen.groups}
       selectedIndex={quickOpen.selectedIndex}
       onSelectedIndexChange={quickOpen.setSelectedIndex}
+      focusToken={quickOpen.focusToken}
       onOpen={(hit, options) => {
         handleQuickOpenSession(hit.candidate.session, options);
         quickOpen.closePalette();

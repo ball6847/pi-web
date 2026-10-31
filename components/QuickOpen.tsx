@@ -30,6 +30,8 @@ interface QuickOpenProps {
   groups: QuickOpenGroup[];
   selectedIndex: number;
   onSelectedIndexChange: (index: number) => void;
+  /** Bumped on every open, so the field takes the caret again. */
+  focusToken: number;
   onOpen: (hit: QuickOpenHit, options?: { newTab?: boolean }) => void;
   onClose: () => void;
   runningIds: ReadonlySet<string>;
@@ -71,6 +73,7 @@ export function QuickOpen({
   groups,
   selectedIndex,
   onSelectedIndexChange,
+  focusToken,
   onOpen,
   onClose,
   runningIds,
@@ -96,6 +99,13 @@ export function QuickOpen({
       opener.focus({ preventScroll: true });
     };
   }, [open]);
+
+  // The chord again while the palette is open: the caret goes back into the
+  // field, and what was typed stays.
+  useEffect(() => {
+    if (!open) return;
+    inputRef.current?.focus({ preventScroll: true });
+  }, [focusToken, open]);
 
   // Keep the selected row in sight.
   useEffect(() => {
@@ -180,6 +190,7 @@ export function QuickOpen({
   const panel = (
     <div
       className="quick-open-layer"
+      data-quick-open="true"
       role="dialog"
       aria-modal="true"
       aria-label={t("quickOpen.label")}

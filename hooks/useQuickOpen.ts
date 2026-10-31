@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   groupQuickOpenHits,
   quickOpenCandidates,
@@ -34,6 +34,8 @@ export interface UseQuickOpenResult {
   hits: QuickOpenHit[];
   groups: QuickOpenGroup[];
   selectedIndex: number;
+  /** Bumped on every open, so the field can take the caret again. */
+  focusToken: number;
   setQuery: (query: string) => void;
   setScope: (scope: QuickOpenScope) => void;
   setSelectedIndex: (index: number) => void;
@@ -48,6 +50,10 @@ export function useQuickOpen({ sessions, projectKey }: UseQuickOpenOptions): Use
   // knowing which project it is in.
   const [scope, setScope] = useState<QuickOpenScope>("all");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [focusToken, setFocusToken] = useState(0);
+  // Whether the palette is open, read without waiting for a render: the chord
+  // that opens it must not wipe what is already typed.
+  const openRef = useRef(false);
 
   const candidates = useMemo(() => quickOpenCandidates(sessions), [sessions]);
   const hits = useMemo(
@@ -67,12 +73,19 @@ export function useQuickOpen({ sessions, projectKey }: UseQuickOpenOptions): Use
   }, []);
 
   const openPalette = useCallback(() => {
+    // Already open: the chord takes the key again (the browser must not
+    // print) and the field takes the caret back, but what was typed stays.
+    if (!openRef.current) {
+      setQueryState("");
+      setSelectedIndex(0);
+    }
+    openRef.current = true;
     setOpen(true);
-    setQueryState("");
-    setSelectedIndex(0);
+    setFocusToken((token) => token + 1);
   }, []);
 
   const closePalette = useCallback(() => {
+    openRef.current = false;
     setOpen(false);
     setQueryState("");
     setSelectedIndex(0);
@@ -92,6 +105,7 @@ export function useQuickOpen({ sessions, projectKey }: UseQuickOpenOptions): Use
     hits,
     groups,
     selectedIndex,
+    focusToken,
     setQuery,
     setScope,
     setSelectedIndex,
