@@ -478,10 +478,17 @@ test("near an edge the list scrolls, never past the rows' own height", () => {
   assert.equal(tree.scroll.scrollTop, content - 100, "stops at the rows' height");
   assert.equal(tree.hook.result.view.drop.anchorKey, "/p11", "the target follows the scroll");
   // The pointer over the footer at the bottom edge, the line above it at the
-  // band's end, both in view as the list scrolled: the ghost clears the line.
+  // band's end, both in view as the list scrolled: the ghost stays in the
+  // list's box and clears the line (it follows the pointer, so it may sit
+  // below the line rather than above it).
   const lineAt = tree.at(tree.hook.result.view.drop.lineY);
   assert.ok(lineAt < bottom && lineAt > SCROLL_TOP_EDGE);
-  assert.equal(tree.ghost.style.top, `${lineAt - GHOST_LINE_GAP_PX - GHOST_HEIGHT - TREE_TOP}px`);
+  const ghostTop = Number.parseFloat(tree.ghost.style.top) + TREE_TOP;
+  assert.ok(ghostTop >= SCROLL_TOP_EDGE && ghostTop + GHOST_HEIGHT <= bottom, "the ghost stays in the list");
+  assert.ok(
+    ghostTop + GHOST_HEIGHT <= lineAt - GHOST_LINE_GAP_PX || ghostTop >= lineAt + GHOST_LINE_GAP_PX,
+    `the ghost clears the line (ghost ${ghostTop}, line ${lineAt})`,
+  );
   tree.move(SCROLL_TOP_EDGE + 1);
   runFrames(1);
   assert.equal(tree.scroll.scrollTop, content - 100 - AUTO_SCROLL_MAX_STEP);

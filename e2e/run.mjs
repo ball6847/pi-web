@@ -17,6 +17,7 @@ import { checkModelDiscovery } from "./model-discovery.mjs";
 import { checkModelContext } from "./model-context.mjs";
 import { checkModelSelector } from "./model-selector.mjs";
 import { checkFilesPlacement, showSidebarSessions } from "./sidebar.mjs";
+import { checkSessionListViews } from "./session-list-views.mjs";
 import { checkSessionNavigation } from "./session-navigation.mjs";
 import { checkProjectNavigation, createProjectNavigationFixtures } from "./project-navigation.mjs";
 import { checkKanbanCardMenuOnPhone } from "./kanban-menu.mjs";
@@ -508,6 +509,8 @@ try {
       // File browser brings the tabs back, and goes back.
       await checkFilesPlacement(page);
       console.log("PASS: files below the sessions by default, tabs from Settings and back");
+      await checkSessionListViews(page);
+      console.log("PASS: the session list's flat view, the keyboard that walks it, and the chord that focuses it");
       await checkModelDiscovery(page);
     }
     await checkModelContext(page);

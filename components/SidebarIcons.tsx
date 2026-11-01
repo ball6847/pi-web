@@ -179,6 +179,28 @@ export function FolderPlusIcon(props: SidebarIconProps) {
   );
 }
 
+/** A flat list of rows: the session list without its project groups. */
+export function ListIcon(props: SidebarIconProps) {
+  return (
+    <SidebarIcon {...props}>
+      <path d="M9 6h11M9 12h11M9 18h11" />
+      <circle cx="4.5" cy="6" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="4.5" cy="12" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="4.5" cy="18" r="1.3" fill="currentColor" stroke="none" />
+    </SidebarIcon>
+  );
+}
+
+/** Stacked layers: the session list as groups, one per project. */
+export function GroupIcon(props: SidebarIconProps) {
+  return (
+    <SidebarIcon {...props}>
+      <path d="m12 3 9 5-9 5-9-5 9-5Z" />
+      <path d="m3 13 9 5 9-5" />
+    </SidebarIcon>
+  );
+}
+
 export function TerminalIcon(props: SidebarIconProps) {
   return (
     <SidebarIcon {...props}>
