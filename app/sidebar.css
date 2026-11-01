@@ -1038,43 +1038,6 @@ a.session-tree-main {
   color: var(--text);
 }
 
-/* The flat list's scope (every project, or the one on show): a small row
-   above the list, where the search's own row sits. */
-.sidebar-flat-bar {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 10px 4px 11px;
-  border-bottom: 1px solid var(--border);
-}
-
-.sidebar-flat-scope {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-hover);
-  color: var(--text-muted);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.sidebar-flat-scope:hover:not(:disabled) {
-  color: var(--text);
-}
-
-.sidebar-flat-scope:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.sidebar-flat-scope-chevron {
-  transform: rotate(90deg);
-  color: var(--text-dim);
-}
 
 .sidebar-tab,
 .sidebar-new-button {
@@ -1239,7 +1202,6 @@ a.session-tree-main {
 .sidebar-new-button:focus-visible,
 .sidebar-search-toggle:focus-visible,
 .sidebar-view-toggle:focus-visible,
-.sidebar-flat-scope:focus-visible,
 .sidebar-tab:focus-visible,
 .sidebar-archive-back:focus-visible,
 .sidebar-archive-menu-button:focus-visible,

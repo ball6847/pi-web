@@ -623,8 +623,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // How the session list is laid out: one group per project, or one flat
   // list of every session cut into day buckets. The user's own choice.
   const [sessionView, setSessionView] = useState<SessionViewMode>("project");
-  // The flat list's scope: every project, or the one on show.
-  const [flatScope, setFlatScope] = useState<"all" | "project">("all");
   const [moreShown, setMoreShown] = useState<Readonly<Record<string, number>>>({});
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
   // The archive view's folded projects, per browser (lib/sidebar-prefs.ts).
@@ -1551,12 +1549,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     unreadIds: unreadSessionIds,
     selectedSessionId,
     currentProject,
-    scopeProjectKey: flatScope === "project" ? currentProjectKey : null,
     moreShown: shownMoreFor(moreShown, FLAT_MORE_KEY),
     pinnedMoreShown: shownMoreFor(moreShown, PINNED_MORE_KEY),
     pinnedCollapsed,
     now: new Date(),
-  }) : null), [sessionView, allSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, currentProjectKey, flatScope, moreShown, pinnedCollapsed]);
+  }) : null), [sessionView, allSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, moreShown, pinnedCollapsed]);
   // The rows the tree shows: the groups, or the flat list.
   const sessionRows = flatModel ? flatModel.rows : model.rows;
 
@@ -3124,22 +3121,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               }}
               className="sidebar-search-input"
             />
-          </div>
-        )}
-        {sessionView === "flat" && (
-          <div className="sidebar-flat-bar">
-            <button
-              type="button"
-              className="sidebar-flat-scope"
-              onClick={() => setFlatScope((scope) => (scope === "all" ? "project" : "all"))}
-              disabled={flatScope === "project" && !currentProjectKey}
-              title={t("sidebar.flatScopeHint")}
-            >
-              <span className="sidebar-flat-scope-label">
-                {flatScope === "all" ? t("sidebar.flatScopeAll") : t("sidebar.flatScopeProject")}
-              </span>
-              <ChevronIcon size={10} className="sidebar-flat-scope-chevron" />
-            </button>
           </div>
         )}
         <SessionSearch

@@ -598,8 +598,6 @@ export interface FlatTreeInput {
   selectedSessionId: string | null;
   /** projectFor(selectedCwd); the project's name, where a row shows it. */
   currentProject: { key: string; root: string } | null;
-  /** The project to narrow the list to; null: every project. */
-  scopeProjectKey: string | null;
   /** Sessions the "show more" window has opened past the limit. */
   moreShown: number;
   /** The pinned band's own "show more" window. */
@@ -635,8 +633,6 @@ export function buildFlatRows(input: FlatTreeInput): { rows: SidebarRow[]; archi
       archivedCount++;
       continue;
     }
-    const key = familyProjectKey(family);
-    if (input.scopeProjectKey !== null && key !== input.scopeProjectKey) continue;
     resolver.noteFamily(family);
     if (isFamilyPinned(family, uiState, runningIds)) pinnedFamilies.push(family);
     else ordinary.push(family);
