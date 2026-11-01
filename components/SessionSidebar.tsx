@@ -12,20 +12,25 @@ import {
   adjacentProjectMove,
   archivedFamilyIds,
   buildArchiveRows,
+  buildFlatRows,
   buildSessionTree,
   effectiveGroupExpansion,
   familiesToArchive,
   familiesToDelete,
   familyIds,
+  FLAT_MORE_KEY,
   forgetKeptOpenGroups,
+  forgetForcedOpenGroups,
   forgetShownMoreOfFolded,
   isFamilyArchived,
+  isFamilyPinned,
   isGroupExpanded,
   keepOutgoingGroupOpen,
   nextProjectKeysToRecord,
   PINNED_MORE_KEY,
   showLessFamilies,
   showMoreFamilies,
+  shownMoreFor,
   type SidebarProject,
   type SidebarRow,
 } from "@/lib/session-tree";
@@ -38,6 +43,7 @@ import {
   loadPinnedCollapsed,
   loadShowIgnoredFiles,
   loadSidebarTab,
+  loadSessionViewMode,
   rememberCwdGitStatus,
   saveArchiveCollapsed,
   saveFilesCollapsed,
@@ -45,6 +51,8 @@ import {
   savePinnedCollapsed,
   saveShowIgnoredFiles,
   saveSidebarTab,
+  saveSessionViewMode,
+  type SessionViewMode,
   type SidebarTab,
 } from "@/lib/sidebar-prefs";
 import {
@@ -104,6 +112,8 @@ import {
   DotOutlineIcon,
   EyeIcon,
   FolderIcon,
+  GroupIcon,
+  ListIcon,
   MessageIcon,
   MoreIcon,
   ForkIcon,
@@ -256,6 +266,12 @@ interface Props {
 export interface SessionSidebarControl {
   /** Identity, then the sidebar's cwd, then `onNewSession`, as any new session. */
   startNewSessionIn(target: NewSessionTarget): void;
+  /**
+   * The tree's focus: the active session's row, revealed (its group opened
+   * for the page) and focused. The chord that asks for it (Cmd/Ctrl+Shift+E,
+   * VSCode's "focus on explorer") lands there.
+   */
+  focusActiveSession(): void;
   /**
    * Opens the folder picker; the validated folder goes to `onPicked`, which
    * decides whether to start there. Focus goes back to `returnFocusTo` when
@@ -494,7 +510,7 @@ function useHeaderFit(ref: RefObject<HTMLElement | null>, labels: string): () =>
   const fit = useCallback(() => {
     const header = ref.current;
     if (!header) return;
-    for (const level of ["0", "1", "2"]) {
+    for (const level of ["0", "1", "2", "3"]) {
       header.dataset.fit = level;
       if (header.scrollWidth <= header.clientWidth) return;
     }
@@ -600,6 +616,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // (SHOW_MORE_STEP a click), the pinned section, the archive view.
   const [groupExpansion, setGroupExpansion] = useState<Readonly<Record<string, boolean>>>({});
   const [keptOpenGroups, setKeptOpenGroups] = useState<ReadonlySet<string>>(() => new Set());
+  // The groups a session pick opened for the page: they win over the saved
+  // choices, so a session picked in a folded project shows. The saved choice
+  // is not changed: the group folds again after a reload.
+  const [forcedOpenGroups, setForcedOpenGroups] = useState<ReadonlySet<string>>(() => new Set());
+  // How the session list is laid out: one group per project, or one flat
+  // list of every session cut into day buckets. The user's own choice.
+  const [sessionView, setSessionView] = useState<SessionViewMode>("project");
+  // The flat list's scope: every project, or the one on show.
+  const [flatScope, setFlatScope] = useState<"all" | "project">("all");
   const [moreShown, setMoreShown] = useState<Readonly<Record<string, number>>>({});
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
   // The archive view's folded projects, per browser (lib/sidebar-prefs.ts).
@@ -630,6 +655,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // SessionTreeReveal. Held until the tree says it is done with it.
   const [treeReveal, setTreeReveal] = useState<SessionTreeReveal | null>(null);
   const treeRevealIdRef = useRef(0);
+  // The session picked in the tree (its row is already there: nothing to
+  // reveal), the session already revealed, and the chord's focus request.
+  const pickedInTreeRef = useRef<string | null>(null);
+  const revealedSelectionRef = useRef<string | null>(null);
+  // The pick whose folded group was opened for the page.
+  const forcedForSelectionRef = useRef<string | null>(null);
+  const focusActiveRef = useRef(false);
+  const [treeFocusRequest, setTreeFocusRequest] = useState(0);
+  // The tab switch, for the code above its own definition (the chord's
+  // focus request).
+  const switchTabRef = useRef<(tab: SidebarTab) => void>(() => {});
   const handleRevealHandled = useCallback((id: number) => {
     setTreeReveal((current) => (current?.id === id ? null : current));
   }, []);
@@ -756,6 +792,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     const groups = loadGroupExpansion();
     if (Object.keys(groups).length > 0) setGroupExpansion(groups);
     if (loadPinnedCollapsed()) setPinnedCollapsed(true);
+    if (loadSessionViewMode() === "flat") setSessionView("flat");
     const archiveFolds = loadArchiveCollapsed();
     if (archiveFolds.length > 0) setArchiveCollapsed(archiveFolds);
     if (loadFilesCollapsed()) setFilesCollapsed(true);
@@ -1372,6 +1409,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const startNewSessionInRef = useRef(startNewSessionIn);
   startNewSessionInRef.current = startNewSessionIn;
 
+  // The chord's focus request: the tree's row of the active session, opened
+  // and focused (the sessions tab, where the tree is).
+  const focusActiveSession = useCallback(() => {
+    if (!selectedSessionIdRef.current) return;
+    switchTabRef.current("sessions");
+    focusActiveRef.current = true;
+    setTreeFocusRequest((request) => request + 1);
+  }, []);
+
   useImperativeHandle(controlRef, () => ({
     startNewSessionIn: (target) => startNewSessionInRef.current(target),
     openFolderForNewSession: (onPicked, returnFocusTo) => {
@@ -1387,7 +1433,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     },
     refreshWorktrees,
     createWorktree,
-  }), [createWorktree, refreshWorktrees]);
+    focusActiveSession,
+  }), [createWorktree, focusActiveSession, refreshWorktrees]);
 
   // Header "+": a new session in the sidebar's current cwd (worktree).
   const handleNewSession = useCallback(() => {
@@ -1402,6 +1449,16 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     () => new Map(sessionFamilies.map((family) => [family.root.id, family])),
     [sessionFamilies],
   );
+  // Every session's family, a subagent's too: the pick of a subagent's row
+  // reveals its family's row.
+  const familyByMemberId = useMemo(() => {
+    const map = new Map<string, SessionFamily>();
+    for (const family of sessionFamilies) {
+      map.set(family.root.id, family);
+      for (const subagent of family.subagents) map.set(subagent.id, family);
+    }
+    return map;
+  }, [sessionFamilies]);
 
   // Every session id of an archived family (search tags them), and how many
   // families each project has in the archive.
@@ -1468,8 +1525,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // groups kept open for the page. Writes go to the saved choices alone
   // (saveGroupChoices).
   const shownGroupExpansion = useMemo(
-    () => effectiveGroupExpansion(groupExpansion, keptOpenGroups),
-    [groupExpansion, keptOpenGroups],
+    () => effectiveGroupExpansion(groupExpansion, keptOpenGroups, forcedOpenGroups),
+    [groupExpansion, keptOpenGroups, forcedOpenGroups],
   );
   const model = useMemo(() => buildSessionTree({
     sessions: allSessions,
@@ -1483,6 +1540,76 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     moreShown,
     pinnedCollapsed,
   }), [allSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, shownGroupExpansion, moreShown, pinnedCollapsed]);
+  // The flat "All sessions" view: every session in one list, cut into the day
+  // buckets (today, yesterday, this week, earlier). Its own model: no
+  // project groups, so no project order and no group choices.
+  const flatModel = useMemo(() => (sessionView === "flat" ? buildFlatRows({
+    sessions: allSessions,
+    uiState,
+    runningIds: runningSessionIds,
+    awaitingIds: awaitingInputSessionIds,
+    unreadIds: unreadSessionIds,
+    selectedSessionId,
+    currentProject,
+    scopeProjectKey: flatScope === "project" ? currentProjectKey : null,
+    moreShown: shownMoreFor(moreShown, FLAT_MORE_KEY),
+    pinnedMoreShown: shownMoreFor(moreShown, PINNED_MORE_KEY),
+    pinnedCollapsed,
+    now: new Date(),
+  }) : null), [sessionView, allSessions, uiState, runningSessionIds, awaitingInputSessionIds, unreadSessionIds, selectedSessionId, currentProject, currentProjectKey, flatScope, moreShown, pinnedCollapsed]);
+  // The rows the tree shows: the groups, or the flat list.
+  const sessionRows = flatModel ? flatModel.rows : model.rows;
+
+  // The row a session's family shows in: the pinned band, its group, or the
+  // flat list.
+  const sessionRowKeyOf = useCallback((family: SessionFamily): string => {
+    // A pinned family's row is in the pinned band, in both views.
+    if (isFamilyPinned(family, uiState, runningSessionIds)) return `session:pinned:${family.root.id}`;
+    return sessionView === "flat" ? `session:flat:${family.root.id}` : `session:group:${family.root.id}`;
+  }, [sessionView, uiState, runningSessionIds]);
+
+  /**
+   * A pick outside the tree (the Quick Open palette, a deep link, the agent
+   * switcher, a board card) reveals its row: a group the user folded hides
+   * it, so that group is opened for the page (the saved choice is not
+   * changed), and the row is scrolled to once it is in the list.
+   *
+   * The chord that focuses the tree asks for the same row, with the focus.
+   */
+  useEffect(() => {
+    if (!selectedSessionId) return;
+    if (pickedInTreeRef.current === selectedSessionId) {
+      pickedInTreeRef.current = null;
+      return;
+    }
+    const family = familyByMemberId.get(selectedSessionId);
+    if (!family) return;
+    const projectKey = workspaceKeyOf(family.root);
+    // A folded group hides its row: open it for the page. The rows change
+    // with it, and the effect runs again for the reveal. Once per pick: the
+    // user's own fold of that group afterwards wins (saveGroupChoices drops
+    // it from the forced set, and the pick is not new).
+    if (groupExpansion[projectKey] === false
+      && !forcedOpenGroups.has(projectKey)
+      && forcedForSelectionRef.current !== selectedSessionId) {
+      forcedForSelectionRef.current = selectedSessionId;
+      setForcedOpenGroups((forced) => new Set(forced).add(projectKey));
+      return;
+    }
+    const rowKey = sessionRowKeyOf(family);
+    if (!sessionRows.some((row) => row.key === rowKey)) return;
+    const takeFocus = focusActiveRef.current;
+    if (revealedSelectionRef.current === selectedSessionId && !takeFocus) return;
+    revealedSelectionRef.current = selectedSessionId;
+    focusActiveRef.current = false;
+    treeRevealIdRef.current += 1;
+    setTreeReveal({
+      id: treeRevealIdRef.current,
+      at: Date.now(),
+      rowKey,
+      takeFocusFrom: takeFocus ? () => true : undefined,
+    });
+  }, [selectedSessionId, sessionRows, sessionRowKeyOf, familyByMemberId, groupExpansion, forcedOpenGroups, treeFocusRequest]);
   // Built while the archive view is rendered, its way out included: it
   // leaves as it was, not empty.
   const archiveMounted = archiveMotion.archiveMounted;
@@ -1585,6 +1712,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     setGroupExpansion(next);
     saveGroupExpansion(next);
     setKeptOpenGroups((kept) => forgetKeptOpenGroups(kept, keys));
+    // An explicit choice wins over a group a session pick opened: the user's
+    // own fold or unfold is the last word.
+    setForcedOpenGroups((forced) => forgetForcedOpenGroups(forced, keys));
     setMoreShown((shown) => forgetShownMoreOfFolded(shown, next, keys));
   }, []);
 
@@ -1656,6 +1786,15 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     setSidebarTab(tab);
     saveSidebarTab(tab);
   }, [stacked]);
+  switchTabRef.current = switchTab;
+
+  // The session list's layout: the project groups, or the flat list of every
+  // session. The user's own choice, kept per browser.
+  const switchSessionView = useCallback(() => {
+    const next: SessionViewMode = sessionView === "project" ? "flat" : "project";
+    setSessionView(next);
+    saveSessionViewMode(next);
+  }, [sessionView]);
 
   // Every fold and unfold goes through here (the toggle, revealFiles, the
   // file search, changes and upload keys, a file manager error), and moves;
@@ -2250,7 +2389,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   // A row whose menu is open can leave the tree (archived or deleted in
   // another window): its menu goes with it.
-  const visibleRows = archiveView ? archiveRows : model.rows;
+  const visibleRows = archiveView ? archiveRows : sessionRows;
   useEffect(() => {
     if (menu?.kind === "row" && !visibleRows.some((row) => row.key === menu.row.key)) setMenu(null);
     if (menu?.kind === "archive-group" && !visibleRows.some((row) => row.key === `archive:${menu.project.key}`)) setMenu(null);
@@ -2262,6 +2401,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     : null;
 
   const handleSelectFamily = useCallback((family: SessionFamily) => {
+    // A pick in the tree: its row is already there, nothing to reveal.
+    pickedInTreeRef.current = family.root.id;
     handleSelectSessionFromList(family.root);
   }, [handleSelectSessionFromList]);
 
@@ -2298,11 +2439,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // decided at the click, by position, so a row that turns selected, unread
   // or running later never shifts it.
   const handleShowMore = useCallback((key: string) => {
-    const row = model.rows.find((item) => (item.kind === "group-more" && item.projectKey === key)
-      || (item.kind === "pinned-more" && key === PINNED_MORE_KEY));
-    if (row?.kind !== "group-more" && row?.kind !== "pinned-more") return;
+    const row = sessionRows.find((item) => (item.kind === "group-more" && item.projectKey === key)
+      || (item.kind === "pinned-more" && key === PINNED_MORE_KEY)
+      || (item.kind === "flat-more" && key === FLAT_MORE_KEY));
+    if (row?.kind !== "group-more" && row?.kind !== "pinned-more" && row?.kind !== "flat-more") return;
     setMoreShown((prev) => showMoreFamilies(prev, key, row.nextShown));
-  }, [model.rows]);
+  }, [sessionRows]);
   const handleShowLess = useCallback((key: string) => {
     setMoreShown((prev) => showLessFamilies(prev, key));
   }, []);
@@ -2912,6 +3054,18 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           <PlusIcon size={12} />
           <span className="sidebar-new-label">{t("sidebar.new")}</span>
         </button>
+        {sessionsShown && (
+          <button
+            type="button"
+            className={`sidebar-view-toggle${sessionView === "flat" ? " is-active" : ""}`}
+            onClick={switchSessionView}
+            aria-pressed={sessionView === "flat"}
+            title={sessionView === "flat" ? t("sidebar.viewByProject") : t("sidebar.viewAllSessions")}
+            aria-label={sessionView === "flat" ? t("sidebar.viewByProject") : t("sidebar.viewAllSessions")}
+          >
+            {sessionView === "flat" ? <GroupIcon size={15} /> : <ListIcon size={15} />}
+          </button>
+        )}
         <button
           ref={searchButtonRef}
           type="button"
@@ -2972,6 +3126,22 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             />
           </div>
         )}
+        {sessionView === "flat" && (
+          <div className="sidebar-flat-bar">
+            <button
+              type="button"
+              className="sidebar-flat-scope"
+              onClick={() => setFlatScope((scope) => (scope === "all" ? "project" : "all"))}
+              disabled={flatScope === "project" && !currentProjectKey}
+              title={t("sidebar.flatScopeHint")}
+            >
+              <span className="sidebar-flat-scope-label">
+                {flatScope === "all" ? t("sidebar.flatScopeAll") : t("sidebar.flatScopeProject")}
+              </span>
+              <ChevronIcon size={10} className="sidebar-flat-scope-chevron" />
+            </button>
+          </div>
+        )}
         <SessionSearch
           open={sessionSearchOpen}
           query={sessionSearchQuery}
@@ -2987,7 +3157,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             <div className="sidebar-sessions-view" hidden={archiveMotion.mainHidden} inert={archiveMotion.mainInert}>
               <SessionTree
                 {...treeProps}
-                rows={model.rows}
+                rows={sessionRows}
                 emptyLabel={t("sidebar.noSessions")}
                 reveal={treeReveal}
                 onRevealHandled={handleRevealHandled}

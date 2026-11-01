@@ -18,11 +18,13 @@ import type { SessionFamily } from "@/lib/session-family";
 import { splitForkSuffix } from "@/lib/session-fork-name";
 import { MAX_PROJECT_NAME_LENGTH, type ProjectMovePosition } from "@/lib/session-ui-state-shared";
 import {
+  FLAT_MORE_KEY,
   PINNED_MORE_KEY,
   getRowOffsets,
   getVisibleRowIndices,
   revealScrollTop,
   revealStep,
+  scrollRowIntoView,
   type RevealMisses,
   type SidebarLayout,
   type SidebarProject,
@@ -176,6 +178,33 @@ function anchorOf(button: HTMLElement): SidebarMenuAnchor {
   return { kind: "rect", rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }, align: "end" };
 }
 
+/** The rows a keyboard can walk to: everything with a control. */
+function isFocusableRow(row: SidebarRow): boolean {
+  switch (row.kind) {
+    case "spacer":
+    case "flat-section":
+    case "group-empty":
+      return false;
+    default:
+      return true;
+  }
+}
+
+/**
+ * Where the focus goes when the "show more" row itself is gone ("show
+ * less"): the group it belongs to, or the row above it in the flat list.
+ */
+function moreFallbackKey(rows: readonly SidebarRow[], rowKey: string, key: string): string {
+  if (key === PINNED_MORE_KEY) return "pinned-header";
+  if (key !== FLAT_MORE_KEY) return `group:${key}`;
+  const index = rows.findIndex((row) => row.key === rowKey);
+  for (let at = index - 1; at >= 0; at--) {
+    const row = rows[at];
+    if (row && isFocusableRow(row)) return row.key;
+  }
+  return "footer-open";
+}
+
 export function SessionTree(props: SessionTreeProps): ReactNode {
   const {
     rows,
@@ -325,15 +354,16 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
     tries: number;
     /** A reveal's rule for focus that is still on the page (see SessionTreeReveal). */
     takeFocusFrom?: (active: Element) => boolean;
+    /** Take the focus even if it survived elsewhere (an arrow key moves it). */
+    force?: boolean;
   } | null>(null);
   const handleMoreAction = useCallback((rowKey: string, key: string, action: "more" | "less", button: HTMLElement) => {
     const focus = document.activeElement === button;
     const keyboard = focus && button.matches(":focus-visible");
-    const fallbackKey = key === PINNED_MORE_KEY ? "pinned-header" : `group:${key}`;
-    pendingMoreRef.current = { rowKey, fallbackKey, focus, scroll: action === "less" || keyboard };
+    pendingMoreRef.current = { rowKey, fallbackKey: moreFallbackKey(rows, rowKey, key), focus, scroll: action === "less" || keyboard };
     if (action === "more") handlersRef.current.onShowMore(key);
     else handlersRef.current.onShowLess(key);
-  }, []);
+  }, [rows]);
   useLayoutEffect(() => {
     const pending = pendingMoreRef.current;
     if (!pending) return;
@@ -381,7 +411,7 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
     const active = document.activeElement;
     // Focus that survived (the clicked button is still there) stays put,
     // unless a reveal may take it from where it is.
-    if (active && active !== document.body && document.contains(active) && !target.takeFocusFrom?.(active)) {
+    if (!target.force && active && active !== document.body && document.contains(active) && !target.takeFocusFrom?.(active)) {
       pendingFocusRef.current = null;
       return;
     }
@@ -398,7 +428,79 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
     } else if (++target.tries > 2) {
       pendingFocusRef.current = null;
     }
-  }, [visibleIndices]);
+    // The reveal is a dependency too: a row that is already mounted does not
+    // change the visible rows, and the focus would wait for a change that
+    // never comes.
+  }, [visibleIndices, pendingReveal]);
+
+  // The rows a keyboard can walk to: everything with a control. The spacers,
+  // a day bucket's header and a group's empty note have none.
+  const focusableRowKeys = useMemo(() => rows.filter(isFocusableRow).map((row) => row.key), [rows]);
+
+  // The focus goes to a row's control, once it is mounted: a row outside the
+  // window is scrolled to first (at the nearer edge, the way a keyboard
+  // walks a list), and the focus follows in the commit that mounts it.
+  const focusRow = useCallback((rowKey: string) => {
+    const root = scrollRef.current;
+    const row = root?.querySelector(`[data-row-key="${CSS.escape(rowKey)}"]`) ?? null;
+    const button = row?.querySelector<HTMLElement>("a[href], button");
+    if (button) {
+      button.focus({ preventScroll: true });
+      return;
+    }
+    const index = rows.findIndex((item) => item.key === rowKey);
+    const element = scrollRef.current;
+    if (element && index >= 0) {
+      const next = scrollRowIntoView(offsets, index, element.scrollTop, element.clientHeight);
+      if (next !== null) {
+        element.scrollTop = next;
+        setScrollTop(next);
+      }
+    }
+    pendingFocusRef.current = { rowKey, fallbackKey: rowKey, tries: 0, force: true };
+  }, [rows, offsets]);
+
+  // The keyboard's own scroll: an arrow key moves the focus from row to row,
+  // Home and End jump to the ends, and the left and right arrows fold and
+  // unfold a group. The MiniMax session center walks its list this way; the
+  // DeepSeek Harness does not (its README lists that as a limitation).
+  const handleTreeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.metaKey || event.ctrlKey || event.altKey || isImeKey(event)) return;
+    const target = event.target as HTMLElement | null;
+    // A field in the tree (a rename) keeps its own keys.
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+    const key = event.key;
+    if (key !== "ArrowDown" && key !== "ArrowUp" && key !== "Home" && key !== "End" && key !== "ArrowLeft" && key !== "ArrowRight") return;
+    const focused = target?.closest("[data-row-key]") ?? null;
+    // The tree has the focus (a row's control): a key pressed elsewhere on
+    // the page is not the tree's.
+    if (!focused) return;
+    // A row that is renaming or confirming keeps its keys: its own controls
+    // are what the keyboard is for there.
+    if (focused.classList.contains("is-confirming") || focused.classList.contains("is-renaming")) return;
+    const currentKey = focused.getAttribute("data-row-key");
+    event.preventDefault();
+    if (key === "ArrowLeft" || key === "ArrowRight") {
+      // A group header folds and unfolds; every other row ignores them.
+      if (!currentKey || !currentKey.startsWith("group:")) return;
+      const row = rows.find((item) => item.kind === "group" && item.key === currentKey);
+      if (!row || row.kind !== "group") return;
+      if ((key === "ArrowRight") === row.expanded) return;
+      handlersRef.current.onToggleGroup(row.project.key, false);
+      return;
+    }
+    const keys = focusableRowKeys;
+    if (keys.length === 0) return;
+    const currentIndex = currentKey === null ? -1 : keys.indexOf(currentKey);
+    let targetIndex: number;
+    if (key === "Home") targetIndex = 0;
+    else if (key === "End") targetIndex = keys.length - 1;
+    else if (currentIndex < 0) targetIndex = key === "ArrowDown" ? 0 : keys.length - 1;
+    else targetIndex = (currentIndex + (key === "ArrowDown" ? 1 : -1) + keys.length) % keys.length;
+    const targetKey = keys[targetIndex];
+    if (targetKey === currentKey) return;
+    focusRow(targetKey);
+  }, [rows, focusableRowKeys, focusRow]);
 
   const hasTreeRows = rows.some((row) => row.kind === "session" || row.kind === "group");
   const showEmpty = !loading && !error && emptyLabel !== null && !hasTreeRows;
@@ -424,6 +526,7 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
         onScroll={handleScroll}
         onFocus={handleFocus}
         onBlur={handleBlur}
+        onKeyDown={handleTreeKeyDown}
         onPointerDownCapture={groupDrag.onPointerDownCapture}
         onClickCapture={groupDrag.onClickCapture}
       >
@@ -589,7 +692,9 @@ const SessionRowView = memo(function SessionRowView({
   // the suffix that tells it from its source, never the suffix.
   const forkTitle = root.name && root.relation?.kind === "fork" ? splitForkSuffix(root.name) : null;
   const details = root.detailsPending ? "…" : t("sidebar.messagesCount", { count: root.messageCount });
-  const tooltip = `${title}\n${details} · ${formatRelativeTime(root.modified, locale, nowDate)}${branch ? ` · ⑂ ${branch}` : ""}`;
+  // A flat row names its project: the list has no group header to say it.
+  const where = context === "flat" ? `${row.project.name} · ` : "";
+  const tooltip = `${title}\n${where}${details} · ${formatRelativeTime(root.modified, locale, nowDate)}${branch ? ` · ⑂ ${branch}` : ""}`;
 
   // The right column says the one thing worth knowing: awaiting input, else
   // running, else unread, else when (a pinned row names its project instead).
@@ -616,6 +721,15 @@ const SessionRowView = memo(function SessionRowView({
     metaTitle = t("sidebar.newActivity");
   } else if (context === "pinned") {
     meta = <span className="session-tree-project">{row.project.name}</span>;
+  } else if (context === "flat") {
+    // The flat list has no group header: the row says which project it is
+    // in, beside the time that says when.
+    meta = (
+      <span className="session-tree-flat-meta">
+        <span className="session-tree-time">{formatShortRelativeTime(family.latestModified, locale, nowDate)}</span>
+        <span className="session-tree-project">{row.project.name}</span>
+      </span>
+    );
   } else {
     meta = formatShortRelativeTime(family.latestModified, locale, nowDate);
   }
@@ -1035,6 +1149,40 @@ const PlainRowView = memo(function PlainRowView({
   const style = rowStyle(top, height);
 
   switch (row.kind) {
+    case "flat-section":
+      // A day bucket's header (today, yesterday, this week, earlier). Not a
+      // control: nothing folds, so it takes no focus.
+      return (
+        <div className="session-tree-row session-tree-section" style={style} data-row-key={row.key}>
+          <span className="session-tree-section-label">{t(`sidebar.recent.${row.section}`)}</span>
+          <span className="session-tree-section-count">· {row.count}</span>
+        </div>
+      );
+    case "flat-more":
+      return (
+        <div className="session-tree-row session-tree-more" style={style} data-row-key={row.key}>
+          {row.hidden > 0 && (
+            <button
+              type="button"
+              className="session-tree-more-toggle"
+              data-more-action="more"
+              onClick={(event) => onMoreAction(row.key, FLAT_MORE_KEY, "more", event.currentTarget)}
+            >
+              {t("sidebar.showMore", { count: row.hidden })}
+            </button>
+          )}
+          {row.canShowLess && (
+            <button
+              type="button"
+              className="session-tree-more-toggle"
+              data-more-action="less"
+              onClick={(event) => onMoreAction(row.key, FLAT_MORE_KEY, "less", event.currentTarget)}
+            >
+              {t("sidebar.showLess")}
+            </button>
+          )}
+        </div>
+      );
     case "pinned-header":
       return (
         <div className="session-tree-row session-tree-pinned-header" style={style} data-row-key={row.key}>

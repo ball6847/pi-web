@@ -199,6 +199,21 @@ export function isQuickOpenShortcut(event: PanelShortcutEvent, isMac: boolean): 
 }
 
 /**
+ * `Cmd+Shift+E` on macOS, `Ctrl+Shift+E` elsewhere: focus the session tree
+ * (the sidebar's session explorer), on the active session's row.
+ *
+ * VSCode binds the same chord to "focus on the explorer", and the session
+ * list is our explorer. `Alt` is refused, because Windows reports AltGr as
+ * Ctrl+Alt and an AltGr combination that types a character is the user's
+ * text.
+ */
+export function isFocusSessionTreeShortcut(event: PanelShortcutEvent, isMac: boolean): boolean {
+  if (event.altKey || !event.shiftKey) return false;
+  if (!hasPrimaryModifier(event, isMac)) return false;
+  return event.key.toLowerCase() === "e";
+}
+
+/**
  * `Cmd+Alt+Enter` on macOS, `Ctrl+Alt+Enter` elsewhere: the right panel's
  * full-width mode.
  *
@@ -336,6 +351,8 @@ interface UseGlobalKeyboardShortcutsOptions {
   onOpenQuickOpen?: () => void;
   /** Called when the composer-focus chord is pressed. */
   onFocusComposer?: () => void;
+  /** Called when the session tree's focus chord is pressed. */
+  onFocusSessionTree?: () => void;
   /**
    * Whether the platform's primary modifier is `Cmd` (macOS) rather than
    * `Ctrl` (Windows, Linux). The platform toggles follow it, so a chord
@@ -366,6 +383,7 @@ interface UseGlobalKeyboardShortcutsOptions {
  *   Ctrl+`       – toggle the terminal
  *   Cmd/Ctrl+P   – open the Quick Open palette
  *   Cmd/Ctrl+L   – focus the chat composer
+ *   Cmd/Ctrl+Shift+E – focus the session tree (the session explorer)
  *
  * Note: Esc inside <textarea> or <input> is deliberately NOT handled here.
  * ChatInput manages its own Esc logic (closing slash / @ file menus, stopping
@@ -388,6 +406,7 @@ export function useGlobalKeyboardShortcuts(
     onSelectAdjacentPanelTab,
     onOpenQuickOpen,
     onFocusComposer,
+    onFocusSessionTree,
     isMac = false,
   } = options;
 
@@ -459,6 +478,19 @@ export function useGlobalKeyboardShortcuts(
         return;
       }
 
+      // ---- Cmd/Ctrl+Shift+E: focus the session tree ----
+      if (isFocusSessionTreeShortcut(e, isMac)) {
+        if (!onFocusSessionTree) return;
+        // The chord is ours: the default is stopped first, every time.
+        e.preventDefault();
+        // A modal (Settings, the trust dialog, the palette) owns the screen:
+        // the tree is not what the user is looking at. The key stays
+        // swallowed.
+        if (isInsideModal(e)) return;
+        onFocusSessionTree();
+        return;
+      }
+
       // ---- Panel toggles: sidebar, right panel, terminal ----
       // The terminal is checked first: it is the only chord that carries no
       // letter, so it cannot be mistaken for the other two.
@@ -493,5 +525,5 @@ export function useGlobalKeyboardShortcuts(
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeCwd, escapeStopsAgent, isMac, onClosePanelTab, onFocusComposer, onNewSession, onOpenQuickOpen, onSelectAdjacentPanelTab, onToggleRightPanel, onToggleRightPanelFullscreen, onToggleSidebar, onToggleTerminal]);
+  }, [activeCwd, escapeStopsAgent, isMac, onClosePanelTab, onFocusComposer, onFocusSessionTree, onNewSession, onOpenQuickOpen, onSelectAdjacentPanelTab, onToggleRightPanel, onToggleRightPanelFullscreen, onToggleSidebar, onToggleTerminal]);
 }

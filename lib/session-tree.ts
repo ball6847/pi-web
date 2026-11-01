@@ -18,6 +18,7 @@
  */
 
 import { listSessionFamilies, type SessionFamily } from "./session-family";
+import { sessionRecencySection, type SessionRecencySection } from "./session-recency";
 import { storedProjectName, type ProjectMovePosition, type SessionUiFamilyState, type SessionUiState } from "./session-ui-state-shared";
 import type { SessionInfo } from "./types";
 import { workspaceKeyOf } from "./workspace-memory";
@@ -25,7 +26,8 @@ import { workspaceKeyOf } from "./workspace-memory";
 export type SidebarLayout = "desktop" | "mobile";
 export type SidebarRowKind =
   | "pinned-header" | "session" | "pinned-more" | "group" | "group-more" | "group-empty"
-  | "spacer" | "footer-open" | "footer-archived" | "archive-group";
+  | "spacer" | "footer-open" | "footer-archived" | "archive-group"
+  | "flat-section" | "flat-more";
 
 /**
  * Per-kind row heights: one rhythm. Session rows, the section headers (a
@@ -36,11 +38,21 @@ export type SidebarRowKind =
  * group from the next and the groups from the footer.
  */
 export const SIDEBAR_ROW_HEIGHTS: Record<SidebarLayout, Record<SidebarRowKind, number>> = {
-  desktop: { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 },
-  mobile: { "pinned-header": 44, session: 44, "pinned-more": 36, group: 44, "group-more": 36, "group-empty": 44, spacer: 8, "footer-open": 44, "footer-archived": 44, "archive-group": 44 },
+  desktop: { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28, "flat-section": 28, "flat-more": 26 },
+  mobile: { "pinned-header": 44, session: 44, "pinned-more": 36, group: 44, "group-more": 36, "group-empty": 44, spacer: 8, "footer-open": 44, "footer-archived": 44, "archive-group": 44, "flat-section": 44, "flat-more": 36 },
 };
 export const GROUP_VISIBLE_LIMIT = 6;
 export const PINNED_VISIBLE_LIMIT = 8;
+/**
+ * The flat "All sessions" view's window: how many sessions it shows before
+ * its "show more". A flat list has no group to hold a project's sessions
+ * apart, so its window is one for the whole list; it is wide enough to cover
+ * a day or two of work, narrow enough that a long history does not mount
+ * hundreds of rows at once.
+ */
+export const FLAT_VISIBLE_LIMIT = 30;
+/** `moreShown` entry for the flat view's "show more". */
+export const FLAT_MORE_KEY = "flat";
 /** How many more families each "show more" click reveals. */
 export const SHOW_MORE_STEP = 20;
 /** `moreShown` entry for the pinned section's "show more". */
@@ -57,7 +69,7 @@ export interface SidebarFamilyStatus { running: boolean; awaiting: boolean; unre
 // input counts as awaiting, not running.
 export type SidebarRow =
   | { kind: "pinned-header"; key: "pinned-header"; count: number; collapsed: boolean; running: number; awaiting: number; unread: number }
-  | { kind: "session"; key: string; family: SessionFamily; context: "pinned" | "group" | "archive"; project: SidebarProject; status: SidebarFamilyStatus }
+  | { kind: "session"; key: string; family: SessionFamily; context: "pinned" | "group" | "archive" | "flat"; project: SidebarProject; status: SidebarFamilyStatus }
   | { kind: "pinned-more"; key: "pinned-more"; hidden: number; canShowLess: boolean; nextShown: number }
   | { kind: "group"; key: string; project: SidebarProject; expanded: boolean; running: number; awaiting: number; unread: number }
   | { kind: "group-more"; key: string; projectKey: string; hidden: number; canShowLess: boolean; nextShown: number }
@@ -65,7 +77,9 @@ export type SidebarRow =
   | { kind: "spacer"; key: "top-spacer" | "pinned-spacer" | "footer-spacer" | `group-spacer:${string}` }
   | { kind: "footer-open"; key: "footer-open" }
   | { kind: "footer-archived"; key: "footer-archived"; count: number }
-  | { kind: "archive-group"; key: string; project: SidebarProject; count: number; expanded: boolean };
+  | { kind: "archive-group"; key: string; project: SidebarProject; count: number; expanded: boolean }
+  | { kind: "flat-section"; key: string; section: SessionRecencySection; count: number }
+  | { kind: "flat-more"; key: "flat-more"; hidden: number; canShowLess: boolean; nextShown: number };
 
 export interface SessionTreeInput {
   /** The full catalog (allSessions), subagents included. */
@@ -207,20 +221,42 @@ export function keepOutgoingGroupOpen(
 
 /**
  * What the tree shows and every toggle reads: the saved choices over the
- * groups kept open for the page (keepOutgoingGroupOpen). Returns
- * `groupExpansion` itself while none is kept open. Never saved: only
- * explicit choices are.
+ * groups kept open for the page (keepOutgoingGroupOpen), over the groups a
+ * session pick opened (forcedOpen). Returns `groupExpansion` itself while
+ * none is kept open. Never saved: only explicit choices are.
+ *
+ * `forcedOpen` wins over a saved fold: the user asked for a session in that
+ * project, so it shows. The saved fold is not changed — it folds again after
+ * a reload, and an explicit choice made meanwhile (saveGroupChoices) drops
+ * the group from the forced set.
  */
 export function effectiveGroupExpansion(
   groupExpansion: Readonly<Record<string, boolean>>,
   keptOpen: ReadonlySet<string>,
+  forcedOpen?: ReadonlySet<string>,
 ): Readonly<Record<string, boolean>> {
-  if (keptOpen.size === 0) return groupExpansion;
+  const forced = forcedOpen && forcedOpen.size > 0 ? forcedOpen : null;
+  if (keptOpen.size === 0 && !forced) return groupExpansion;
   // fromEntries defines own properties, so no key can reach the prototype.
   return Object.fromEntries([
     ...[...keptOpen].filter((key) => !Object.hasOwn(groupExpansion, key)).map((key) => [key, true] as const),
     ...Object.entries(groupExpansion),
+    ...(forced ? [...forced].map((key) => [key, true] as const) : []),
   ]);
+}
+
+/**
+ * The forced groups without the ones an explicit choice now covers (`keys`;
+ * null for a choice made for every group at once). Returns `forcedOpen`
+ * itself when none of them was in it.
+ */
+export function forgetForcedOpenGroups(forcedOpen: ReadonlySet<string>, keys: readonly string[] | null): ReadonlySet<string> {
+  if (forcedOpen.size === 0) return forcedOpen;
+  if (keys === null) return new Set();
+  if (!keys.some((key) => forcedOpen.has(key))) return forcedOpen;
+  const next = new Set(forcedOpen);
+  for (const key of keys) next.delete(key);
+  return next;
 }
 
 /**
@@ -313,7 +349,7 @@ function createProjectResolver(
 
 function sessionRow(
   family: SessionFamily,
-  context: "pinned" | "group" | "archive",
+  context: "pinned" | "group" | "archive" | "flat",
   project: SidebarProject,
   input: FamilyFlagsInput,
 ): SidebarRow {
@@ -548,6 +584,109 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
   if (archivedCount > 0) rows.push({ kind: "footer-archived", key: "footer-archived", count: archivedCount });
 
   return { rows, projects: orderedProjects, archivedCount, unorderedKeysByBand, projectKeysToRecord };
+}
+
+/** What the flat "All sessions" view needs to build its rows. */
+export interface FlatTreeInput {
+  /** The full catalog (allSessions), subagents included. */
+  sessions: readonly SessionInfo[];
+  uiState: SessionUiState;
+  runningIds: ReadonlySet<string>;
+  /** Members parked on an extension's blocking dialog, a subset of runningIds. */
+  awaitingIds?: ReadonlySet<string>;
+  unreadIds: ReadonlySet<string>;
+  selectedSessionId: string | null;
+  /** projectFor(selectedCwd); the project's name, where a row shows it. */
+  currentProject: { key: string; root: string } | null;
+  /** The project to narrow the list to; null: every project. */
+  scopeProjectKey: string | null;
+  /** Sessions the "show more" window has opened past the limit. */
+  moreShown: number;
+  /** The pinned band's own "show more" window. */
+  pinnedMoreShown: number;
+  /** The pinned band is folded (the user's own choice, shared with the grouped view). */
+  pinnedCollapsed: boolean;
+  /** The clock: the day buckets are the browser's own time zone. */
+  now: Date;
+}
+
+/**
+ * The flat "All sessions" view: every session of the scope in one list, newest
+ * first, cut into the day buckets (today, yesterday, this week, earlier).
+ *
+ * A flat list has no group header, so a row carries its project on its own.
+ * The pinned sessions keep their own band at the top (as in the grouped view)
+ * and do not repeat in the day buckets.
+ *
+ * The same rules as the grouped view's groups: a session that runs, is
+ * unread or is the selected one is never hidden by the window, and "show
+ * more" opens it in steps of SHOW_MORE_STEP.
+ */
+export function buildFlatRows(input: FlatTreeInput): { rows: SidebarRow[]; archivedCount: number } {
+  const { uiState, runningIds } = input;
+  const resolver = createProjectResolver(uiState, input.currentProject);
+
+  let archivedCount = 0;
+  const pinnedFamilies: SessionFamily[] = [];
+  const ordinary: SessionFamily[] = [];
+
+  for (const family of listSessionFamilies(input.sessions)) {
+    if (isFamilyArchived(family, uiState, runningIds)) {
+      archivedCount++;
+      continue;
+    }
+    const key = familyProjectKey(family);
+    if (input.scopeProjectKey !== null && key !== input.scopeProjectKey) continue;
+    resolver.noteFamily(family);
+    if (isFamilyPinned(family, uiState, runningIds)) pinnedFamilies.push(family);
+    else ordinary.push(family);
+  }
+
+  const rows: SidebarRow[] = [{ kind: "spacer", key: "top-spacer" }];
+
+  if (pinnedFamilies.length > 0) {
+    const pinnedAt = (family: SessionFamily) => finiteNumber(familyEntry(uiState, family.root.id)?.pinnedAt) ?? 0;
+    const sorted = pinnedFamilies
+      .map((family, index) => ({ family, index }))
+      .sort((a, b) => compareDesc(pinnedAt(a.family), pinnedAt(b.family)) || a.index - b.index)
+      .map(({ family }) => family);
+    const { running, awaiting, unread } = activityCounts(sorted, input);
+    rows.push({ kind: "pinned-header", key: "pinned-header", count: sorted.length, collapsed: input.pinnedCollapsed, running, awaiting, unread });
+    if (!input.pinnedCollapsed) {
+      const { visible, revealed, nextShown } = visibleFamilies(sorted, PINNED_VISIBLE_LIMIT, input.pinnedMoreShown, input);
+      for (const family of visible) {
+        rows.push(sessionRow(family, "pinned", resolver.get(familyProjectKey(family)), input));
+      }
+      const more = moreRowState(sorted.length, visible.length, revealed);
+      if (more) rows.push({ kind: "pinned-more", key: "pinned-more", ...more, nextShown });
+    }
+    rows.push({ kind: "spacer", key: "pinned-spacer" });
+  }
+
+  // The day buckets, in the order the sessions arrive (newest first): a
+  // bucket starts where the last one ended.
+  const { visible, revealed, nextShown } = visibleFamilies(ordinary, FLAT_VISIBLE_LIMIT, input.moreShown, input);
+  const buckets = new Map<SessionRecencySection, SessionFamily[]>();
+  for (const family of visible) {
+    const section = sessionRecencySection(timeOf(family.latestModified), input.now);
+    const list = buckets.get(section);
+    if (list) list.push(family);
+    else buckets.set(section, [family]);
+  }
+  for (const [section, families] of buckets) {
+    rows.push({ kind: "flat-section", key: `flat-section:${section}`, section, count: families.length });
+    for (const family of families) {
+      rows.push(sessionRow(family, "flat", resolver.get(familyProjectKey(family)), input));
+    }
+  }
+  const more = moreRowState(ordinary.length, visible.length, revealed);
+  if (more) rows.push({ kind: "flat-more", key: "flat-more", ...more, nextShown });
+
+  rows.push({ kind: "spacer", key: "footer-spacer" });
+  rows.push({ kind: "footer-open", key: "footer-open" });
+  if (archivedCount > 0) rows.push({ kind: "footer-archived", key: "footer-archived", count: archivedCount });
+
+  return { rows, archivedCount };
 }
 
 /**
@@ -931,6 +1070,26 @@ export function revealScrollTop(
   if (block === "start") return top === scrollTop ? null : top;
   if (top >= scrollTop && bottom <= scrollTop + viewportHeight) return null;
   return Math.max(0, top - Math.max(0, (viewportHeight - (bottom - top)) / 2));
+}
+
+/**
+ * The scrollTop that brings row `index` just into view, at the nearer edge:
+ * null when it is already in view. The keyboard's own scroll (an arrow key
+ * moves the focus from row to row), which must not jump the list the way a
+ * reveal's centring does.
+ */
+export function scrollRowIntoView(
+  offsets: readonly number[],
+  index: number,
+  scrollTop: number,
+  viewportHeight: number,
+): number | null {
+  if (!Number.isInteger(index) || index < 0 || index >= offsets.length - 1) return null;
+  const top = offsets[index];
+  const bottom = offsets[index + 1];
+  if (top < scrollTop) return Math.max(0, top);
+  if (bottom > scrollTop + viewportHeight) return Math.max(0, bottom - viewportHeight);
+  return null;
 }
 
 /** A reveal request is dropped once its row has missed this many rows updates, or this long after it was made. */

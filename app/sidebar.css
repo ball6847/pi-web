@@ -395,6 +395,41 @@ a.session-tree-main {
   vertical-align: bottom;
 }
 
+/* A flat row's right column: when it happened, and which project it is in.
+   The flat list has no group header to say the project, so the row says it
+   itself, beside its time. */
+.session-tree-flat-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.session-tree-time {
+  color: var(--text-dim);
+}
+
+/* A day bucket's header (today, yesterday, this week, earlier) in the flat
+   list: a section label like the pinned section's, in the text column, where
+   the session titles start. Not a control: nothing folds, so it takes no
+   focus. */
+.session-tree-section {
+  padding: 0 8px 0 calc(var(--session-tree-inset-left) + 20px);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.session-tree-section-label {
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.session-tree-section-count {
+  margin-left: 3px;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
 /* Always rendered, empty-looking while its buttons are hidden: a gap of its
    own would keep the time 2px off the edge. */
 .session-tree-actions {
@@ -965,7 +1000,8 @@ a.session-tree-main {
    cell is the one chosen (a tab, the open search). */
 .sidebar-tab,
 .sidebar-new-button,
-.sidebar-search-toggle {
+.sidebar-search-toggle,
+.sidebar-view-toggle {
   display: flex;
   flex: none;
   align-items: center;
@@ -981,6 +1017,63 @@ a.session-tree-main {
   white-space: nowrap;
   cursor: pointer;
   transition: background 0.12s, color 0.12s;
+}
+
+/* The session list's layout: the project groups, or the flat list of every
+   session. A cell of its own between New and the search, so the two read
+   as the three cells the row has. */
+.sidebar-view-toggle {
+  width: 32px;
+  padding: 0;
+  border-right: 1px solid var(--border);
+}
+
+.sidebar-view-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-view-toggle.is-active {
+  border-top-color: var(--accent);
+  color: var(--text);
+}
+
+/* The flat list's scope (every project, or the one on show): a small row
+   above the list, where the search's own row sits. */
+.sidebar-flat-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 11px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-flat-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sidebar-flat-scope:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.sidebar-flat-scope:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.sidebar-flat-scope-chevron {
+  transform: rotate(90deg);
+  color: var(--text-dim);
 }
 
 .sidebar-tab,
@@ -1006,13 +1099,15 @@ a.session-tree-main {
 
 .sidebar-tab:hover,
 .sidebar-new-button:not(:disabled):hover,
-.sidebar-search-toggle:hover {
+.sidebar-search-toggle:hover,
+.sidebar-view-toggle:hover {
   background: var(--bg-hover);
   color: var(--text);
 }
 
 .sidebar-tab.is-selected,
-.sidebar-search-toggle.is-active {
+.sidebar-search-toggle.is-active,
+.sidebar-view-toggle.is-active {
   border-top-color: var(--accent);
   background: var(--bg-selected);
   color: var(--text);
@@ -1112,6 +1207,24 @@ a.session-tree-main {
   font-size: 11px;
 }
 
+/* A third fit level: the row's cells tighten their padding, so the view
+   toggle fits beside them on the narrowest sidebar. */
+.sidebar-header[data-fit="3"] .sidebar-tab {
+  padding: 0 8px;
+}
+
+.sidebar-header[data-fit="3"] .sidebar-new-button {
+  width: 28px;
+}
+
+.sidebar-header[data-fit="3"] .sidebar-search-toggle {
+  padding: 0 8px;
+}
+
+.sidebar-header[data-fit="3"] .sidebar-view-toggle {
+  width: 26px;
+}
+
 .sidebar-header[data-fit="1"] .sidebar-new-label,
 .sidebar-header[data-fit="2"] .sidebar-new-label,
 .sidebar-header[data-fit="2"] .sidebar-tab-label {
@@ -1125,6 +1238,8 @@ a.session-tree-main {
 
 .sidebar-new-button:focus-visible,
 .sidebar-search-toggle:focus-visible,
+.sidebar-view-toggle:focus-visible,
+.sidebar-flat-scope:focus-visible,
 .sidebar-tab:focus-visible,
 .sidebar-archive-back:focus-visible,
 .sidebar-archive-menu-button:focus-visible,
