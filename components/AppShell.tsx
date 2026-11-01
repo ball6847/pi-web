@@ -1651,6 +1651,27 @@ export function AppShell() {
     focusComposerForced();
   }, [centerView, focusComposerForced]);
 
+  // The session tree's focus chord (VSCode's "focus on the explorer"): the
+  // sidebar opens if it is closed, and the tree takes the focus on the
+  // active session's row.
+  const handleFocusSessionTree = useCallback(() => {
+    if (!sidebarOpen) {
+      setSidebarOpen(true);
+      desktopSidebarOpenRef.current = true;
+    }
+    sidebarControlRef.current?.focusActiveSession();
+  }, [sidebarOpen]);
+
+  // The session list's view chord (the groups or the flat list): the
+  // sidebar opens if it is closed, so the change is what the user sees.
+  const handleToggleSessionView = useCallback(() => {
+    if (!sidebarOpen) {
+      setSidebarOpen(true);
+      desktopSidebarOpenRef.current = true;
+    }
+    sidebarControlRef.current?.toggleSessionView();
+  }, [sidebarOpen]);
+
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.). Esc stops the
   // run only while the chat is the screen on show: the board view covers a
   // still mounted ChatWindow, whose abort handler would otherwise stop the
@@ -1667,6 +1688,8 @@ export function AppShell() {
     onSelectAdjacentPanelTab: handleSelectAdjacentPanelTab,
     onOpenQuickOpen: quickOpen.openPalette,
     onFocusComposer: handleFocusComposer,
+    onFocusSessionTree: handleFocusSessionTree,
+    onToggleSessionView: handleToggleSessionView,
     isMac,
   });
 
@@ -2074,6 +2097,7 @@ export function AppShell() {
         onAwaitingInputSessionIdsChange={handleAwaitingInputSessionIdsChange}
         onUnreadSessionIdsChange={handleUnreadSessionIdsChange}
         onSessionsChange={handleSessionsChange}
+        onOpenQuickOpen={quickOpen.openPalette}
         kanban={{
           onOpenBoard: (projectRoot) => openKanbanBoardView(projectRoot),
           sessionIndex: kanbanSessionIndex,

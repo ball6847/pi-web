@@ -20,6 +20,7 @@ const LEGACY_GROUP_EXPANSION_STORAGE_KEY = "pi-web:sidebar-groups";
 const ARCHIVE_COLLAPSED_STORAGE_KEY = "pi-web:sidebar-archive-collapsed";
 const PINNED_COLLAPSED_STORAGE_KEY = "pi-web:sidebar-pins-collapsed";
 const SHOW_IGNORED_FILES_STORAGE_KEY = "pi-web:sidebar-files-show-ignored";
+const SESSION_VIEW_STORAGE_KEY = "pi-web:sidebar-session-view";
 const FILES_COLLAPSED_STORAGE_KEY = "pi-web:sidebar-files-collapsed";
 const NON_GIT_CWDS_STORAGE_KEY = "pi-web:sidebar-non-git-cwds";
 /**
@@ -35,6 +36,14 @@ const MAX_GROUP_EXPANSION_ENTRIES = 300;
 const MAX_NON_GIT_CWDS = 50;
 
 export type SidebarTab = "sessions" | "files";
+
+/**
+ * How the session list is laid out: one group per project, or one flat list
+ * of every session cut into day buckets. The flat list is the answer to
+ * "which session was that?" when the project is not known; the groups are
+ * the answer to "what did I do in this project?".
+ */
+export type SessionViewMode = "project" | "flat";
 
 interface StorageLike {
   getItem(key: string): string | null;
@@ -176,6 +185,28 @@ export function savePinnedCollapsed(
   if (!storage) return;
   try {
     storage.setItem(PINNED_COLLAPSED_STORAGE_KEY, String(collapsed));
+  } catch {
+    // Persistence is best-effort.
+  }
+}
+
+/**
+ * The session list's layout: the groups (the default) or the flat list.
+ * The groups unless the browser saved the flat one.
+ */
+export function loadSessionViewMode(storage: StorageLike | null = getBrowserStorage()): SessionViewMode {
+  if (!storage) return "project";
+  try {
+    return storage.getItem(SESSION_VIEW_STORAGE_KEY) === "flat" ? "flat" : "project";
+  } catch {
+    return "project";
+  }
+}
+
+export function saveSessionViewMode(mode: SessionViewMode, storage: StorageLike | null = getBrowserStorage()): void {
+  if (!storage) return;
+  try {
+    storage.setItem(SESSION_VIEW_STORAGE_KEY, mode);
   } catch {
     // Persistence is best-effort.
   }

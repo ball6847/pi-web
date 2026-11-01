@@ -17,6 +17,7 @@
  */
 
 import { fuzzyMatchTerm, fuzzyTierRank, type FuzzyTier } from "./fuzzy";
+import { sessionRecencySection, type SessionRecencySection } from "./session-recency";
 import { getFileName } from "./file-paths";
 import { sessionDisplayTitle } from "./session-fork-name";
 import type { SessionInfo } from "./types";
@@ -111,7 +112,7 @@ export function quickOpenTitleWindow(
 }
 
 /** The day groups the recent list (an empty query) is cut into. */
-export type QuickOpenGroupKey = "today" | "yesterday" | "week" | "earlier";
+export type QuickOpenGroupKey = SessionRecencySection;
 
 export interface QuickOpenGroup {
   key: QuickOpenGroupKey;
@@ -221,23 +222,16 @@ export function searchQuickOpen(
   return hits.slice(0, limit);
 }
 
-/** The start of the day `date` falls in, in the browser's own time zone. */
-function startOfDay(date: Date): number {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-}
-
 /**
  * The day group a hit belongs to: today, yesterday, this week, earlier.
  * Only the recent list (an empty query) is grouped; a ranked list of hits
  * is one list, since its order is the ranking.
+ *
+ * The rule is shared with the sidebar's flat "All sessions" view
+ * (lib/session-recency.ts): both cut the same sessions the same way.
  */
 export function quickOpenGroupKey(modifiedMs: number, now: Date): QuickOpenGroupKey {
-  if (!modifiedMs) return "earlier";
-  const today = startOfDay(now);
-  if (modifiedMs >= today) return "today";
-  if (modifiedMs >= today - 24 * 60 * 60 * 1000) return "yesterday";
-  if (modifiedMs >= today - 7 * 24 * 60 * 60 * 1000) return "week";
-  return "earlier";
+  return sessionRecencySection(modifiedMs, now);
 }
 
 /** The recent list cut into its day groups, newest first. */

@@ -12,6 +12,8 @@ const {
   handleGlobalEscape,
   isCloseTabShortcut,
   isFocusComposerShortcut,
+  isFocusSessionTreeShortcut,
+  isToggleSessionViewShortcut,
   isNewSessionShortcut,
   isPanelTabNavigationShortcut,
   isRightPanelFullscreenShortcut,
@@ -460,4 +462,43 @@ test("the composer chord does nothing behind a modal", () => {
 
   hook.unmount();
   delete globalThis.window;
+});
+
+// ---------------------------------------------------------------------------
+// The session tree chord: Cmd/Ctrl+Shift+E
+// ---------------------------------------------------------------------------
+
+test("Cmd/Ctrl+Shift+E focuses the session tree, the platform's primary modifier", () => {
+  assert.equal(isFocusSessionTreeShortcut(panelEvent({ key: "e", code: "KeyE", metaKey: true, shiftKey: true }), true), true);
+  assert.equal(isFocusSessionTreeShortcut(panelEvent({ key: "e", code: "KeyE", ctrlKey: true, shiftKey: true }), false), true);
+  // The other platform's modifier is not the chord.
+  assert.equal(isFocusSessionTreeShortcut(panelEvent({ key: "e", code: "KeyE", ctrlKey: true, shiftKey: true }), true), false);
+  assert.equal(isFocusSessionTreeShortcut(panelEvent({ key: "e", code: "KeyE", metaKey: true, shiftKey: true }), false), false);
+  // Caps Lock still delivers the letter.
+  assert.equal(isFocusSessionTreeShortcut(panelEvent({ key: "E", code: "KeyE", metaKey: true, shiftKey: true }), true), true);
+  // Another letter is not the chord.
+  assert.equal(isFocusSessionTreeShortcut(panelEvent({ key: "p", code: "KeyP", metaKey: true, shiftKey: true }), true), false);
+});
+
+test("the session view's chord is Shift with the primary modifier", () => {
+  assert.equal(isToggleSessionViewShortcut(panelEvent({ key: "g", code: "KeyG", metaKey: true, shiftKey: true }), true), true);
+  assert.equal(isToggleSessionViewShortcut(panelEvent({ key: "g", code: "KeyG", ctrlKey: true, shiftKey: true }), false), true);
+  // The other platform's modifier is not the chord.
+  assert.equal(isToggleSessionViewShortcut(panelEvent({ key: "g", code: "KeyG", ctrlKey: true, shiftKey: true }), true), false);
+  assert.equal(isToggleSessionViewShortcut(panelEvent({ key: "g", code: "KeyG", metaKey: true, shiftKey: true }), false), false);
+  // Caps Lock still delivers the letter.
+  assert.equal(isToggleSessionViewShortcut(panelEvent({ key: "G", code: "KeyG", metaKey: true, shiftKey: true }), true), true);
+  // Without Shift it is the plain letter.
+  assert.equal(isToggleSessionViewShortcut(panelEvent({ key: "g", code: "KeyG", metaKey: true }), true), false);
+  // Alt is the AltGr modifier: a character the user typed.
+  assert.equal(isToggleSessionViewShortcut(panelEvent({ key: "g", code: "KeyG", metaKey: true, shiftKey: true, altKey: true }), true), false);
+  // Another letter is not the chord.
+  assert.equal(isToggleSessionViewShortcut(panelEvent({ key: "e", code: "KeyE", metaKey: true, shiftKey: true }), true), false);
+});
+
+test("the session tree chord needs Shift, and refuses Alt", () => {
+  // Without Shift it is the plain letter (the palette's own chord).
+  assert.equal(isFocusSessionTreeShortcut(panelEvent({ key: "e", code: "KeyE", metaKey: true }), true), false);
+  // Alt is the AltGr modifier: a character the user typed.
+  assert.equal(isFocusSessionTreeShortcut(panelEvent({ key: "e", code: "KeyE", metaKey: true, shiftKey: true, altKey: true }), true), false);
 });

@@ -477,7 +477,7 @@ test("renders the model built from a catalog with unique row keys", () => {
   const html = render({ rows: model.rows });
   const keys = renderedKeys(html);
   assert.equal(new Set(keys).size, keys.length);
-  assert.deepEqual(keys, ["pinned-header", "session:pinned:b", "group:/work/app", "session:group:a", "footer-open"]);
+  assert.deepEqual(keys, ["pinned-header", "session:pinned:b", "group:/work/app", "session:group:a", "footer-open", "footer-search"]);
   const familyRow = rowMarkup(html, "session:group:a");
   assert.match(familyRow, /is-selected/);
   assert.match(familyRow, /aria-label="Agent running…"/);
@@ -559,14 +559,18 @@ test("headers lead with their chevron, and every row's text starts in one column
   // No layout overrides these paddings, so phones line up the same way.
   assert.doesNotMatch(css, /\.is-mobile \.session-tree-(?:session|group-toggle|group-empty|more|pinned-toggle|archive-group|footer-button) \{[^}]*padding/);
   // One rhythm: session rows, every header (a project's, the pinned
-  // section's, the archive's projects), the empty note and the footer are
-  // one height, 28px (44px on a phone); only "show more" is shorter.
-  assert.deepEqual(SIDEBAR_ROW_HEIGHTS.desktop, { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 });
+  // section's, the archive's projects, a day bucket's), the empty note and
+  // the footer are one height, 28px (44px on a phone); only "show more" is
+  // shorter.
+  assert.deepEqual(SIDEBAR_ROW_HEIGHTS.desktop, { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "footer-search": 28, "archive-group": 28, "flat-section": 28, "flat-more": 26 });
   for (const [layout, height] of [["desktop", 28], ["mobile", 44]]) {
-    for (const kind of ["session", "group", "pinned-header", "group-empty", "footer-open", "footer-archived", "archive-group"]) {
+    for (const kind of ["session", "group", "pinned-header", "group-empty", "footer-open", "footer-archived", "footer-search", "archive-group", "flat-section"]) {
       assert.equal(SIDEBAR_ROW_HEIGHTS[layout][kind], height, `${layout} ${kind}`);
     }
   }
+  // A day bucket's header spans the whole width, so its padding adds the
+  // rows' inset, and its label starts in the text column like the titles.
+  assert.match(cssRule(".session-tree-section"), /padding: 0 8px 0 calc\(var\(--session-tree-inset-left\) \+ 20px\);/);
 });
 
 test("group headers draw nothing for a drag while idle", () => {
