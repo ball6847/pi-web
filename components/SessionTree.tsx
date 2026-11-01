@@ -425,7 +425,7 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
     if (button) {
       button.focus({ preventScroll: true });
       pendingFocusRef.current = null;
-    } else if (++target.tries > 2) {
+    } else if (++target.tries > 5) {
       pendingFocusRef.current = null;
     }
     // The reveal is a dependency too: a row that is already mounted does not
