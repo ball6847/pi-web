@@ -554,6 +554,8 @@ export const zhTWLocale: LocalePlugin = {
     "sidebar.openInExplorerRemoteOnly": "僅在 Pi Web 執行於本機時可用",
     "sidebar.openInExplorerUnsupported": "目前平台不支援",
     "sidebar.searchFiles": "搜尋檔案",
+    "sidebar.quickOpen": "搜尋對話（Quick Open）",
+    "sidebar.searchTranscripts": "在對話中搜尋",
     "sidebar.searchFilesPlaceholder": "搜尋檔案…",
     "sidebar.searchingFiles": "搜尋中…",
     "sidebar.noMatchingFiles": "找不到相符的檔案",

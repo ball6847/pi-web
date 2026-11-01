@@ -1662,6 +1662,16 @@ export function AppShell() {
     sidebarControlRef.current?.focusActiveSession();
   }, [sidebarOpen]);
 
+  // The session list's view chord (the groups or the flat list): the
+  // sidebar opens if it is closed, so the change is what the user sees.
+  const handleToggleSessionView = useCallback(() => {
+    if (!sidebarOpen) {
+      setSidebarOpen(true);
+      desktopSidebarOpenRef.current = true;
+    }
+    sidebarControlRef.current?.toggleSessionView();
+  }, [sidebarOpen]);
+
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.). Esc stops the
   // run only while the chat is the screen on show: the board view covers a
   // still mounted ChatWindow, whose abort handler would otherwise stop the
@@ -1679,6 +1689,7 @@ export function AppShell() {
     onOpenQuickOpen: quickOpen.openPalette,
     onFocusComposer: handleFocusComposer,
     onFocusSessionTree: handleFocusSessionTree,
+    onToggleSessionView: handleToggleSessionView,
     isMac,
   });
 
@@ -2086,6 +2097,7 @@ export function AppShell() {
         onAwaitingInputSessionIdsChange={handleAwaitingInputSessionIdsChange}
         onUnreadSessionIdsChange={handleUnreadSessionIdsChange}
         onSessionsChange={handleSessionsChange}
+        onOpenQuickOpen={quickOpen.openPalette}
         kanban={{
           onOpenBoard: (projectRoot) => openKanbanBoardView(projectRoot),
           sessionIndex: kanbanSessionIndex,

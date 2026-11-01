@@ -554,6 +554,8 @@ export const enLocale: LocalePlugin = {
     "sidebar.openInExplorerRemoteOnly": "Only available when Pi Web runs on this computer",
     "sidebar.openInExplorerUnsupported": "Not supported on this platform",
     "sidebar.searchFiles": "Search files",
+    "sidebar.quickOpen": "Search sessions (Quick Open)",
+    "sidebar.searchTranscripts": "Search in conversations",
     "sidebar.searchFilesPlaceholder": "Search files…",
     "sidebar.searchingFiles": "Searching…",
     "sidebar.noMatchingFiles": "No matching files",

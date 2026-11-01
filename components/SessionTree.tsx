@@ -48,6 +48,7 @@ import {
   PinIcon,
   PlusIcon,
   RestoreIcon,
+  SearchIcon,
   SpinnerIcon,
   TrashIcon,
 } from "./SidebarIcons";
@@ -137,6 +138,8 @@ export interface SessionTreeProps {
   onArchiveGroupMenu?(project: SidebarProject, opener: HTMLElement): void;
   onOpenOtherProject(opener: HTMLElement): void;
   onOpenArchive(): void;
+  /** The footer's transcript search: the search that reads every conversation. */
+  onOpenTranscriptSearch(): void;
   /**
    * Kanban (mock, UI design phase): the board icon a project group header
    * carries, and the marker sessions that have a board card carry.
@@ -470,7 +473,12 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
     // A field in the tree (a rename) keeps its own keys.
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
     const key = event.key;
-    if (key !== "ArrowDown" && key !== "ArrowUp" && key !== "Home" && key !== "End" && key !== "ArrowLeft" && key !== "ArrowRight") return;
+    // `j` and `k` walk the list like the arrows do (vim): the tree has the
+    // focus only when the explorer chord put it there, so the letters stay
+    // the user's text everywhere else.
+    const isDown = key === "ArrowDown" || key === "j";
+    const isUp = key === "ArrowUp" || key === "k";
+    if (!isDown && !isUp && key !== "Home" && key !== "End" && key !== "ArrowLeft" && key !== "ArrowRight") return;
     const focused = target?.closest("[data-row-key]") ?? null;
     // The tree has the focus (a row's control): a key pressed elsewhere on
     // the page is not the tree's.
@@ -495,8 +503,8 @@ export function SessionTree(props: SessionTreeProps): ReactNode {
     let targetIndex: number;
     if (key === "Home") targetIndex = 0;
     else if (key === "End") targetIndex = keys.length - 1;
-    else if (currentIndex < 0) targetIndex = key === "ArrowDown" ? 0 : keys.length - 1;
-    else targetIndex = (currentIndex + (key === "ArrowDown" ? 1 : -1) + keys.length) % keys.length;
+    else if (currentIndex < 0) targetIndex = isDown ? 0 : keys.length - 1;
+    else targetIndex = (currentIndex + (isDown ? 1 : -1) + keys.length) % keys.length;
     const targetKey = keys[targetIndex];
     if (targetKey === currentKey) return;
     focusRow(targetKey);
@@ -1276,6 +1284,15 @@ const PlainRowView = memo(function PlainRowView({
             <ArchiveIcon size={12} />
             <span className="session-tree-footer-label">{t("sidebar.archivedCount", { count: row.count })}</span>
             <ChevronIcon size={10} className="session-tree-footer-chevron" />
+          </button>
+        </div>
+      );
+    case "footer-search":
+      return (
+        <div className="session-tree-row session-tree-footer" style={style} data-row-key={row.key}>
+          <button type="button" className="session-tree-footer-button" onClick={() => handlers.current.onOpenTranscriptSearch()}>
+            <SearchIcon size={12} />
+            <span className="session-tree-footer-label">{t("sidebar.searchTranscripts")}</span>
           </button>
         </div>
       );

@@ -26,7 +26,7 @@ import { workspaceKeyOf } from "./workspace-memory";
 export type SidebarLayout = "desktop" | "mobile";
 export type SidebarRowKind =
   | "pinned-header" | "session" | "pinned-more" | "group" | "group-more" | "group-empty"
-  | "spacer" | "footer-open" | "footer-archived" | "archive-group"
+  | "spacer" | "footer-open" | "footer-archived" | "footer-search" | "archive-group"
   | "flat-section" | "flat-more";
 
 /**
@@ -38,8 +38,8 @@ export type SidebarRowKind =
  * group from the next and the groups from the footer.
  */
 export const SIDEBAR_ROW_HEIGHTS: Record<SidebarLayout, Record<SidebarRowKind, number>> = {
-  desktop: { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28, "flat-section": 28, "flat-more": 26 },
-  mobile: { "pinned-header": 44, session: 44, "pinned-more": 36, group: 44, "group-more": 36, "group-empty": 44, spacer: 8, "footer-open": 44, "footer-archived": 44, "archive-group": 44, "flat-section": 44, "flat-more": 36 },
+  desktop: { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "footer-search": 28, "archive-group": 28, "flat-section": 28, "flat-more": 26 },
+  mobile: { "pinned-header": 44, session: 44, "pinned-more": 36, group: 44, "group-more": 36, "group-empty": 44, spacer: 8, "footer-open": 44, "footer-archived": 44, "footer-search": 44, "archive-group": 44, "flat-section": 44, "flat-more": 36 },
 };
 export const GROUP_VISIBLE_LIMIT = 6;
 export const PINNED_VISIBLE_LIMIT = 8;
@@ -77,6 +77,7 @@ export type SidebarRow =
   | { kind: "spacer"; key: "top-spacer" | "pinned-spacer" | "footer-spacer" | `group-spacer:${string}` }
   | { kind: "footer-open"; key: "footer-open" }
   | { kind: "footer-archived"; key: "footer-archived"; count: number }
+  | { kind: "footer-search"; key: "footer-search" }
   | { kind: "archive-group"; key: string; project: SidebarProject; count: number; expanded: boolean }
   | { kind: "flat-section"; key: string; section: SessionRecencySection; count: number }
   | { kind: "flat-more"; key: "flat-more"; hidden: number; canShowLess: boolean; nextShown: number };
@@ -582,6 +583,10 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
   if (orderedProjects.length > 0) rows.push({ kind: "spacer", key: "footer-spacer" });
   rows.push({ kind: "footer-open", key: "footer-open" });
   if (archivedCount > 0) rows.push({ kind: "footer-archived", key: "footer-archived", count: archivedCount });
+  // The transcripts' full-text search, below the list: the toolbar's search
+  // button opens the Quick Open palette (titles), and this is where the
+  // search that reads every conversation file still lives.
+  rows.push({ kind: "footer-search", key: "footer-search" });
 
   return { rows, projects: orderedProjects, archivedCount, unorderedKeysByBand, projectKeysToRecord };
 }
@@ -681,6 +686,10 @@ export function buildFlatRows(input: FlatTreeInput): { rows: SidebarRow[]; archi
   rows.push({ kind: "spacer", key: "footer-spacer" });
   rows.push({ kind: "footer-open", key: "footer-open" });
   if (archivedCount > 0) rows.push({ kind: "footer-archived", key: "footer-archived", count: archivedCount });
+  // The transcripts' full-text search, below the list: the toolbar's search
+  // button opens the Quick Open palette (titles), and this is where the
+  // search that reads every conversation file still lives.
+  rows.push({ kind: "footer-search", key: "footer-search" });
 
   return { rows, archivedCount };
 }

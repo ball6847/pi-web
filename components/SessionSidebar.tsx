@@ -249,6 +249,11 @@ interface Props {
   onUnreadSessionIdsChange?: (ids: Set<string>) => void;
   onSessionsChange?: (sessions: SessionInfo[]) => void;
   /**
+   * The Quick Open palette, for the toolbar's search button: the palette
+   * finds a session by its title, over every project.
+   */
+  onOpenQuickOpen?: () => void;
+  /**
    * Kanban (mock, UI design phase): the project board's marker — the icon a
    * project group header carries, and the dot the tracked sessions carry.
    */
@@ -272,6 +277,12 @@ export interface SessionSidebarControl {
    * VSCode's "focus on explorer") lands there.
    */
   focusActiveSession(): void;
+  /**
+   * The session list's view: the project groups or the flat list of every
+   * session. The toolbar's button and the chord (Cmd/Ctrl+Shift+G) ask for
+   * it; the choice is kept per browser.
+   */
+  toggleSessionView(): void;
   /**
    * Opens the folder picker; the validated folder goes to `onPicked`, which
    * decides whether to start there. Focus goes back to `returnFocusTo` when
@@ -532,7 +543,7 @@ function buttonAnchor(element: HTMLElement, align: "start" | "end"): SidebarMenu
   return { kind: "rect", rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }, align };
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, controlRef, onNewSessionContextChange, initialSessionId, initialSessionLinked, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onAwaitingInputSessionIdsChange, onUnreadSessionIdsChange, onSessionsChange, kanban }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, controlRef, onNewSessionContextChange, initialSessionId, initialSessionLinked, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onAwaitingInputSessionIdsChange, onUnreadSessionIdsChange, onSessionsChange, onOpenQuickOpen, kanban }: Props) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
@@ -1407,6 +1418,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const startNewSessionInRef = useRef(startNewSessionIn);
   startNewSessionInRef.current = startNewSessionIn;
 
+  // The view toggle, for the handle above (made once: it calls the newest
+  // closure).
+  const switchSessionViewRef = useRef<() => void>(() => {});
+
   // The chord's focus request: the tree's row of the active session, opened
   // and focused (the sessions tab, where the tree is).
   const focusActiveSession = useCallback(() => {
@@ -1432,6 +1447,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     refreshWorktrees,
     createWorktree,
     focusActiveSession,
+    toggleSessionView: () => {
+      // The list's view is the sessions tab's: the tab comes first, so the
+      // change is what the user sees.
+      switchTabRef.current("sessions");
+      switchSessionViewRef.current();
+    },
   }), [createWorktree, focusActiveSession, refreshWorktrees]);
 
   // Header "+": a new session in the sidebar's current cwd (worktree).
@@ -1792,6 +1813,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     setSessionView(next);
     saveSessionViewMode(next);
   }, [sessionView]);
+  switchSessionViewRef.current = switchSessionView;
 
   // Every fold and unfold goes through here (the toggle, revealFiles, the
   // file search, changes and upload keys, a file manager error), and moves;
@@ -2835,6 +2857,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onArchiveGroupMenu: handleArchiveGroupMenu,
     onOpenOtherProject: handleOpenOtherProject,
     onOpenArchive: () => openArchiveView(),
+    onOpenTranscriptSearch: () => {
+      // The full-text search, over every conversation's messages: the
+      // toolbar's search button opens the Quick Open palette, and this is
+      // where the search that reads the files still lives.
+      switchTab("sessions");
+      setSessionSearchOpen(true);
+    },
     // The archive view has no group rows: only the main tree's can be dragged.
     onMoveGroup: moveProject,
     kanban,
@@ -3067,24 +3096,22 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           ref={searchButtonRef}
           type="button"
           onClick={() => {
-            // The search of the tab in view: the files tab's searches its
-            // files; without a folder there, it opens the sessions tab's.
+            // The files tab searches its files; the sessions tab opens the
+            // Quick Open palette, which finds a session by its title over
+            // every project (the search that reads the conversations
+            // themselves is the footer's).
             if (searchesFiles) {
               setFileSearchOpen((open) => !open);
               return;
             }
-            if (!sessionsShown) {
-              switchTab("sessions");
-              setSessionSearchOpen(true);
-              return;
-            }
-            setSessionSearchOpen((open) => !open);
+            if (!sessionsShown) switchTab("sessions");
+            onOpenQuickOpen?.();
           }}
-          title={searchesFiles ? t("sidebar.searchFiles") : t("sidebar.toggleSessionSearch")}
-          aria-label={searchesFiles ? t("sidebar.searchFiles") : t("sidebar.toggleSessionSearch")}
-          aria-expanded={searchesFiles ? fileSearchOpen : sessionSearchOpen}
-          aria-controls={searchesFiles ? "file-search-input" : "session-search-input"}
-          className={`sidebar-search-toggle${(searchesFiles ? fileSearchOpen : sessionSearchOpen) ? " is-active" : ""}`}
+          title={searchesFiles ? t("sidebar.searchFiles") : t("sidebar.quickOpen")}
+          aria-label={searchesFiles ? t("sidebar.searchFiles") : t("sidebar.quickOpen")}
+          aria-expanded={searchesFiles ? fileSearchOpen : undefined}
+          aria-controls={searchesFiles ? "file-search-input" : undefined}
+          className={`sidebar-search-toggle${searchesFiles && fileSearchOpen ? " is-active" : ""}`}
         >
           <SearchIcon size={16} />
         </button>
