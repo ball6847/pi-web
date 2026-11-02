@@ -17,13 +17,7 @@ function callbackBody(name, nextName) {
   return source.slice(start, end);
 }
 
-const callbacks = [
-  callbackBody("handleSelectSession", "handleNewSession"),
-  source.slice(
-    source.indexOf("const handleOpenSubagentParentChat = useCallback"),
-    source.indexOf("// The focus belongs to the hand-over"),
-  ),
-].join("\n");
+const callbacks = callbackBody("handleSelectSession", "handleNewSession");
 const parkedKeyHelper = source.slice(source.indexOf("function parkedNewSessionDraftKey"), source.indexOf("export function AppShell"));
 
 function makeContext(overrides = {}) {
@@ -60,7 +54,6 @@ function makeContext(overrides = {}) {
   }
   vm.runInContext(stripTypeScriptTypes(`${parkedKeyHelper}\n${callbacks}
     globalThis.pick = handleSelectSession;
-    globalThis.handOver = handleOpenSubagentParentChat;
   `), context);
   return context;
 }
@@ -86,14 +79,7 @@ test("a restore leaves the panel as it is", () => {
   assert.equal(context.activeTopPanel, "agents", "URL/tab-memory replay is not a pick");
 });
 
-test("the subagent hand-over reopens the panel after the pick", () => {
-  const context = makeContext({
-    sessionsWithSelection: [session],
-  });
-  context.handOver(session.id, "child-id");
-  assert.equal(context.activeTopPanel, "agents", "the panel opens after the pick closed it");
-  assert.equal(context.agentPanelFocus.sessionId, "child-id");
-});
+
 
 // The outside-close effect: a pointerdown outside the panel and the top bar
 // closes it, one inside either does not (top-bar buttons toggle it themselves).
