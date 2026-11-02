@@ -7,12 +7,13 @@ import vm from "node:vm";
 const source = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
 const terminalSource = await readFile(new URL("./TerminalPanel.tsx", import.meta.url), "utf8");
 
-function callbackBody(name, nextName) {
+function callbackBody(name) {
   const start = source.indexOf(`const ${name} = useCallback`);
-  const end = source.indexOf(`\n  const ${nextName}`, start);
   assert.notEqual(start, -1, `${name} callback not found`);
-  assert.notEqual(end, -1, `${nextName} callback not found after ${name}`);
-  return source.slice(start, end);
+  // Up to the next handler at the same indent: a neighbour added between two
+  // handlers (and its own dependencies) must not join this slice.
+  const end = source.indexOf("\n  const ", start + 1);
+  return source.slice(start, end === -1 ? undefined : end);
 }
 
 /** The strip's own handlers, with the state they read as the test's own. */
@@ -29,8 +30,8 @@ function stripHandlers({ activeTabId = null, panelOpen = true, tabs = [] } = {})
     setRightPanelOpen: (open) => { context.panelOpened = open; },
   });
   vm.runInContext(stripTypeScriptTypes(`${[
-    callbackBody("handleCloseActivePanelTab", "handleSelectAdjacentPanelTab"),
-    callbackBody("handleSelectAdjacentPanelTab", "handleViewFullHistory"),
+    callbackBody("handleCloseActivePanelTab"),
+    callbackBody("handleSelectAdjacentPanelTab"),
   ].join("\n")}
     globalThis.strip = { handleCloseActivePanelTab, handleSelectAdjacentPanelTab };
   `), context);

@@ -1,4 +1,5 @@
-import { StringEnum, Type } from "@earendil-works/pi-ai";
+import { StringEnum } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { KANBAN_COMMENT_MAX, KANBAN_SEARCH_DEFAULT_LIMIT, KANBAN_SEARCH_MAX_LIMIT } from "./kanban-tool-limits";
 
 /** Flat parameters keep provider schemas and the web's argument rows simple. */

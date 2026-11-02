@@ -64,51 +64,14 @@ test("a top-level card uses ordinary selection; missing and foreign ids do nothi
   assert.deepEqual(selected, [parent]);
 });
 
-test("the board and viewer keep their actual shell bindings", async () => {
+test("the board and the session tab keep their actual shell bindings", async () => {
   assert.match(text, /<KanbanBoard[\s\S]*?sessions=\{boardSessions\}[\s\S]*?onOpenSession=\{handleKanbanOpenSession\}/);
-  assert.match(text, /<SubagentViewer[\s\S]*?sessionId=\{activeAgentTab.sessionId\}/);
-  const viewer = await readFile(new URL("./SubagentViewer.tsx", import.meta.url), "utf8");
-  assert.doesNotMatch(viewer, /["'`]\/api\/agent\//, "the viewer has no runtime route");
-  assert.match(viewer, /fetch\(`\/api\/sessions\//);
-  assert.match(viewer, /fetch\(contextUrl\(sessionId\)/);
+  assert.match(text, /<SessionChatPanel[\s\S]*?sessionId=\{activeAgentTab.sessionId\}/);
+  // The tab is a real chat scoped to that session (SessionChatPanel renders
+  // ChatWindow in its panel mode), not a second copy of the page's chat.
+  const panel = await readFile(new URL("./SessionChatPanel.tsx", import.meta.url), "utf8");
+  assert.match(panel, /<ChatWindow[^>]*\bpanel\b/);
+  assert.match(panel, /newSessionCwd=\{null\}/);
 });
 
-test("the read-only viewer hands over to the parent's chat with the child's row focused", () => {
-  const log = [];
-  const selected = { id: "selected", cwd: "/other" };
-  const context = vm.createContext({
-    sessionsWithSelection: [selected, parent, child],
-    selectedSession: selected,
-    useCallback: (fn) => fn,
-    handleSelectSession: (session) => log.push(["select", session.id]),
-    setActiveTopPanel: (panel) => log.push(["panel", panel]),
-    setAgentPanelFocus: (value) => log.push(["focus", value.sessionId]),
-  });
-  evaluate("handleOpenSubagentParentChat", context)(parent.id, child.id);
-  // The panel opens after the selection: handleSelectSession() closes it when
-  // the project changes, so the reverse order would lose the panel.
-  assert.deepEqual(log.map(([kind]) => kind), ["select", "focus", "panel"]);
-  assert.deepEqual(log[0], ["select", parent.id]);
-  assert.deepEqual(log[1], ["focus", child.id]);
-  assert.deepEqual(log[2], ["panel", "agents"]);
-});
 
-test("a hand-over selects the already-open parent too (it leaves the board for the chat) and skips a gone parent", () => {
-  const log = [];
-  const context = vm.createContext({
-    sessionsWithSelection: [parent, child],
-    selectedSession: parent,
-    useCallback: (fn) => fn,
-    handleSelectSession: (session) => log.push(["select", session.id]),
-    setActiveTopPanel: (panel) => log.push(["panel", panel]),
-    setAgentPanelFocus: (value) => log.push(["focus", value.sessionId]),
-  });
-  evaluate("handleOpenSubagentParentChat", context)(parent.id, child.id);
-  // handleSelectSession() does not remount an already-open chat (it skips that
-  // work), but it is what closes a `?board=` view, so the hand-over calls it.
-  assert.deepEqual(log.map(([kind]) => kind), ["select", "focus", "panel"]);
-  assert.deepEqual(log[0], ["select", parent.id]);
-  log.length = 0;
-  evaluate("handleOpenSubagentParentChat", context)("gone", child.id);
-  assert.deepEqual(log, [], "a parent that left the catalogue opens nothing");
-});
