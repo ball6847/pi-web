@@ -411,11 +411,33 @@ a.session-tree-main {
 /* A day bucket's header (today, yesterday, this week, earlier) in the flat
    list: a section label like the pinned section's, in the text column, where
    the session titles start. Not a control: nothing folds, so it takes no
-   focus. */
+   focus. The flat list has no group header, so the label alone read as one
+   more row of sessions: the hairline above it is what separates one bucket
+   from the one before it. The rule's top is at half the row's height less
+   19px, which leaves the label 14px of air below the rule in the 28px
+   desktop row and in the 44px phone row alike (the label is centred in its
+   row, so the two cancel out). On a desktop the rule sits in the spacer
+   band above the row; on a phone, whose rows are taller, it sits inside
+   the row. Either way the gap below the rule is the same. */
 .session-tree-section {
   padding: 0 8px 0 calc(var(--session-tree-inset-left) + 20px);
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.session-tree-section::before {
+  content: "";
+  position: absolute;
+  top: calc(50% - 19px);
+  right: var(--session-tree-inset-right);
+  left: var(--session-tree-inset-left);
+  height: 1px;
+  background: var(--border);
+}
+
+/* The first bucket opens the list: nothing above it to separate from. */
+.session-tree-section.is-first::before {
+  display: none;
 }
 
 .session-tree-section-label {

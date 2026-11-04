@@ -1162,9 +1162,15 @@ const PlainRowView = memo(function PlainRowView({
   switch (row.kind) {
     case "flat-section":
       // A day bucket's header (today, yesterday, this week, earlier). Not a
-      // control: nothing folds, so it takes no focus.
+      // control: nothing folds, so it takes no focus. The hairline above it
+      // separates the bucket from the one before it; the first bucket, with
+      // nothing above it, takes none.
       return (
-        <div className="session-tree-row session-tree-section" style={style} data-row-key={row.key}>
+        <div
+          className={`session-tree-row session-tree-section${row.first ? " is-first" : ""}`}
+          style={style}
+          data-row-key={row.key}
+        >
           <span className="session-tree-section-label">{t(`sidebar.recent.${row.section}`)}</span>
           <span className="session-tree-section-count">· {row.count}</span>
         </div>
