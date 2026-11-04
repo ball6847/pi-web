@@ -613,6 +613,30 @@ test("group headers draw nothing for a drag while idle", () => {
   assert.doesNotMatch(html, /draggable/);
 });
 
+test("a day bucket's header is separated from the bucket above it by a rule and a gap", () => {
+  // The flat list has no group header, so the day bucket's header is the
+  // only thing that says where one bucket ends and the next begins.
+  const rule = cssRule(".session-tree-section::before");
+  assert.match(rule, /\n\s*top: calc\(50% - 19px\);/);
+  assert.match(rule, /\n\s*height: 1px;/);
+  assert.match(rule, /\n\s*background: var\(--border\);/);
+  // The first bucket opens the list: nothing above it to separate from.
+  assert.match(cssRule(".session-tree-section.is-first::before"), /display: none;/);
+
+  // The model: a gap above every bucket but the first, which opens the list.
+  const rows = [
+    { kind: "spacer", key: "top-spacer" },
+    { kind: "flat-section", key: "flat-section:today", section: "today", count: 2, first: true },
+    sessionRow(session("a"), { context: "flat" }),
+    { kind: "spacer", key: "flat-section-spacer:yesterday" },
+    { kind: "flat-section", key: "flat-section:yesterday", section: "yesterday", count: 1, first: false },
+  ];
+  const html = render({ rows });
+  assert.match(rowMarkup(html, "flat-section:today"), /class="session-tree-row session-tree-section is-first"/);
+  assert.match(rowMarkup(html, "flat-section:yesterday"), /class="session-tree-row session-tree-section"/);
+  assert.doesNotMatch(rowMarkup(html, "flat-section:yesterday"), /is-first/);
+});
+
 test("Kanban marks the family row's own card, not a child's independent card", () => {
   const root = session("parent");
   const child = session("child", { relation: { kind: "subagent", parentSessionId: root.id, profile: "x", description: "", status: "completed" } });
