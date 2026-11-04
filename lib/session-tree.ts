@@ -74,12 +74,12 @@ export type SidebarRow =
   | { kind: "group"; key: string; project: SidebarProject; expanded: boolean; running: number; awaiting: number; unread: number }
   | { kind: "group-more"; key: string; projectKey: string; hidden: number; canShowLess: boolean; nextShown: number }
   | { kind: "group-empty"; key: string; project: SidebarProject }
-  | { kind: "spacer"; key: "top-spacer" | "pinned-spacer" | "footer-spacer" | `group-spacer:${string}` }
+  | { kind: "spacer"; key: "top-spacer" | "pinned-spacer" | "footer-spacer" | `group-spacer:${string}` | `flat-section-spacer:${string}` }
   | { kind: "footer-open"; key: "footer-open" }
   | { kind: "footer-archived"; key: "footer-archived"; count: number }
   | { kind: "footer-search"; key: "footer-search" }
   | { kind: "archive-group"; key: string; project: SidebarProject; count: number; expanded: boolean }
-  | { kind: "flat-section"; key: string; section: SessionRecencySection; count: number }
+  | { kind: "flat-section"; key: string; section: SessionRecencySection; count: number; first: boolean }
   | { kind: "flat-more"; key: "flat-more"; hidden: number; canShowLess: boolean; nextShown: number };
 
 export interface SessionTreeInput {
@@ -675,7 +675,13 @@ export function buildFlatRows(input: FlatTreeInput): { rows: SidebarRow[]; archi
     else buckets.set(section, [family]);
   }
   for (const [section, families] of buckets) {
-    rows.push({ kind: "flat-section", key: `flat-section:${section}`, section, count: families.length });
+    // A gap above each bucket's header, and the hairline the header draws:
+    // a bucket's header right on the rows above it reads as one more row
+    // (#1338, the grouped view's rule for a group's header). The first
+    // bucket of the list has nothing above it, so it takes neither.
+    const first = rows.length === 1;
+    if (!first && rows[rows.length - 1].kind !== "spacer") rows.push({ kind: "spacer", key: `flat-section-spacer:${section}` });
+    rows.push({ kind: "flat-section", key: `flat-section:${section}`, section, count: families.length, first });
     for (const family of families) {
       rows.push(sessionRow(family, "flat", resolver.get(familyProjectKey(family)), input));
     }
