@@ -47,6 +47,7 @@ next-env.d.ts
 e2e_*.mjs
 
 .pi/
+.pi-tmp/
 .context/
 GOAL.md
 check.sh
