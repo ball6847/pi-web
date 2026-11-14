@@ -12,6 +12,7 @@ import { chromium } from "playwright";
 import { checkFilePanel, checkLargeHtmlStorage, filePanelFixture, largeStorageFixture } from "./file-panel.mjs";
 import { checkExtensionDialogSizing, checkExtensionDialogs, extensionSource } from "./extension-dialog.mjs";
 import { checkChatAppearance } from "./chat-appearance.mjs";
+import { checkComposerFocus } from "./composer-focus.mjs";
 import { checkCodeBackground } from "./code-background.mjs";
 import { checkStreamingMetrics } from "./streaming-metrics.mjs";
 import { checkModelDiscovery } from "./model-discovery.mjs";
@@ -22,6 +23,7 @@ import { checkFilesPlacement, showSidebarSessions } from "./sidebar.mjs";
 import { checkSessionListViews } from "./session-list-views.mjs";
 import { checkSessionNavigation } from "./session-navigation.mjs";
 import { checkProjectNavigation, createProjectNavigationFixtures } from "./project-navigation.mjs";
+import { checkDirectoryPicker, createDirectoryPickerFixtures } from "./directory-picker.mjs";
 import { checkKanbanCardMenuOnPhone } from "./kanban-menu.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -155,6 +157,7 @@ try {
   ]);
 
   const projectNavigation = createProjectNavigationFixtures({ agentDir, sessionDir, timestamp });
+  const directoryPicker = createDirectoryPickerFixtures(agentDir);
 
   const probe = createServer();
   probe.listen(0, "127.0.0.1");
@@ -492,6 +495,7 @@ try {
     await checkLargeHtmlStorage(page, largeStorageFile);
     await checkExtensionDialogs(page, artifacts, viewport.width);
     await checkExtensionDialogSizing(page, viewport.width);
+    await checkComposerFocus(page, { base, sessionId: RICH });
     if (viewport.width > 600) {
       await page.goto(`${base}/?session=${RICH}`, { waitUntil: "domcontentloaded" });
       await page.locator(".markdown-code-block pre").waitFor();
@@ -547,6 +551,7 @@ try {
     },
   });
   await checkProjectNavigation({ browser, base, artifacts, fixture: projectNavigation, otherSessionId: BRANCH, api, post });
+  await checkDirectoryPicker({ browser, base, fixture: directoryPicker });
   // The card menu on a phone: the soft keyboard's resize must not close it.
   await checkKanbanCardMenuOnPhone({ browser, base, project, sessionId: BRANCH, post, artifacts });
 } catch (error) {
