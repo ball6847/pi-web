@@ -21,9 +21,15 @@ export const KANBAN_NOTICE_LANE_LIMIT = 24;
  * Characters a lane's model-facing instructions may hold — the route's cap
  * (`app/api/kanban/route.ts` refuses longer) and the injection's own bound
  * (`lib/kanban-extension.ts` truncates with a marker, for hand-edited files).
- * 2000 characters is roughly 500 tokens, paid once per lane entry, not per turn.
+ * 2000 characters is roughly 500 tokens, paid once per lane entry and per lane edit.
  */
 export const KANBAN_LANE_INSTRUCTIONS_MAX = 2000;
+
+/**
+ * Characters the whole lane-instructions block may hold: the card's lane and every
+ * instructed lane after it. One lane's cap would let a six-lane board ask for 12000.
+ */
+export const KANBAN_LANE_INSTRUCTIONS_TOTAL_MAX = 4000;
 
 /**
  * Characters the board's notice template may hold — the route's cap and the
