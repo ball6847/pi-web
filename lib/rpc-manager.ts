@@ -3586,8 +3586,11 @@ export async function startRpcSession(
       llamaCppExtension,
       // Eligibility is saved in tools, not inferred from today's profile. Older snapshots must
       // not gain a host tool just because they loaded other resources.
+      // A subagent never gets the notice half, even with the tool saved: a card
+      // is linked to its OWNER, and this session has none of its own.
       ...(subagentResources?.tools.includes("kanban") ? [createKanbanExtension({
         isReadOnly: () => isReadOnlySelection(subagentResources.tools.filter((name) => SDK_BUILTIN_TOOLS.includes(name))),
+        enabled: () => false,
       })] : []),
       ...(subagentCodemode ? [subagentCodemode] : []),
       ...(subagentMcp && subagentResources

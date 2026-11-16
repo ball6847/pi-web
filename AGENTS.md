@@ -162,6 +162,10 @@ Location: `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
 
 `SessionContext.entryIds[]` parallels `messages[]`: each displayed message's `.jsonl` entry id, used for fork and navigate_tree.
 
+## Session lessons
+
+- **A kanban card can vanish mid-run**: another session may delete it, so re-read the card before each lane move. Why: the update then refuses with "Card not found".
+
 ## CSS Variables (`app/globals.css`)
 
 ```
