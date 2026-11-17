@@ -165,6 +165,7 @@ Location: `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
 ## Session lessons
 
 - **A kanban card can vanish mid-run**: another session may delete it, so re-read the card before each lane move. Why: the update then refuses with "Card not found".
+- **A lane says "merge back to main"**: in this repo that means the fork's `kanban` branch through a PR; `main` is the release line. Why: merging the kanban line into `main` drags 120 commits onto a release branch.
 
 ## CSS Variables (`app/globals.css`)
 
