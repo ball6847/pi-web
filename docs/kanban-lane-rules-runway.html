@@ -110,6 +110,7 @@
           <path d="M616 358 H664"/><path d="M824 358 H872"/><path d="M1032 358 H1080"/>
         </g>
         <text x="40" y="404" font-family="'Geist','Noto Sans Thai',system-ui,sans-serif" font-size="11" fill="#5a6580">กฎของ Todo ใช้ไปแล้ว จึงตัดออกจากทางเดิน</text>
+        <text x="700" y="404" font-family="'Geist','Noto Sans Thai',system-ui,sans-serif" font-size="11" fill="#5a6580">Subagent ได้ทางเดินเมื่อ claim หรือถูกมอบหมายการ์ด</text>
 
         <!-- trigger / dedupe / state flow -->
         <rect x="40" y="424" width="200" height="64" rx="8" fill="#ffffff" stroke="#4f5d75" stroke-width="1"/>
@@ -129,7 +130,7 @@
         <text x="908" y="468" font-family="'Geist','Noto Sans Thai',system-ui,sans-serif" font-size="10" text-anchor="middle" fill="#4f5d75">ความจำ · บริบท · ยกเลิก</text>
 
         <rect x="1064" y="424" width="176" height="64" rx="8" fill="#bf452020" stroke="#bf4520" stroke-width="1"/>
-        <text x="1152" y="448" font-family="'Geist','Noto Sans Thai',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle" fill="#2d3142">ส่งเข้า prompt หรือเงียบ</text>
+        <text x="1152" y="448" font-family="'Geist','Noto Sans Thai',system-ui,sans-serif" font-size="12" font-weight="600" text-anchor="middle" fill="#2d3142">ส่งเข้า prompt ทันที</text>
         <text x="1152" y="468" font-family="'Geist Mono',ui-monospace,monospace" font-size="9" text-anchor="middle" fill="#bf4520">display:false custom msg</text>
 
         <g stroke="#4f5d75" stroke-width="1" fill="none" marker-end="url(#arrow)">
@@ -142,9 +143,9 @@
         <text x="844" y="538" font-family="'Geist','Noto Sans Thai',system-ui,sans-serif" font-size="10" font-weight="600" letter-spacing="0.02em" fill="#4f5d75" text-anchor="middle">การ์ดย้ายเลน → ทางเดินใหม่</text>
 
         <text x="40" y="592" font-family="'Geist','Noto Sans Thai',system-ui,sans-serif" font-size="12" font-weight="600" fill="#2d3142">ส่งเข้า prompt เมื่อ:</text>
-        <text x="204" y="592" font-family="'Geist','Noto Sans Thai',system-ui,sans-serif" font-size="10" fill="#4f5d75">เทิร์นแรก · ผูกการ์ดกลางทาง · เข้าเลน · แก้กฎ · compaction</text>
+        <text x="204" y="592" font-family="'Geist','Noto Sans Thai',system-ui,sans-serif" font-size="10" fill="#4f5d75">เทิร์นแรก · claim/ย้ายเลนกลางรัน · ผูกการ์ด · แก้กฎ · compaction</text>
         <text x="40" y="616" font-family="'Geist','Noto Sans Thai',system-ui,sans-serif" font-size="12" font-weight="600" fill="#2d3142">เงียบเมื่อ:</text>
-        <text x="204" y="616" font-family="'Geist','Noto Sans Thai',system-ui,sans-serif" font-size="10" fill="#4f5d75">ลายเซ็นเดิม · ไม่มีการ์ด · ไม่มีกฎข้างหน้า · subagent</text>
+        <text x="204" y="616" font-family="'Geist','Noto Sans Thai',system-ui,sans-serif" font-size="10" fill="#4f5d75">ลายเซ็นเดิม · ไม่มีการ์ด · ไม่มีกฎข้างหน้า</text>
 
         <line x1="40" y1="648" x2="1240" y2="648" stroke="#2d3142" stroke-opacity="0.12" stroke-width="1"/>
         <text x="40" y="668" font-family="'Geist','Noto Sans Thai',system-ui,sans-serif" font-size="10" font-weight="600" fill="#4f5d75">คำอธิบาย</text>
@@ -167,7 +168,7 @@
       </div>
       <div class="note">
         <h2>ขอบเขตและขีดจำกัด</h2>
-        <p>เฉพาะการ์ดของเซสชันนั้น subagent ไม่ได้รับกฎต่อจากต้นทาง ข้อความจำกัด 2,000 ตัวอักษรต่อเลน และ 4,000 ตัวอักษรทั้งบล็อก เลนที่ใส่ไม่ได้จะถูกระบุชื่อ ไม่ใช่ถูกตัดทิ้งเงียบๆ</p>
+        <p>การ์ดของเซสชันนั้น หรือการ์ดที่ถูกมอบหมายอย่างชัดเจนเท่านั้น ไม่สืบทอดการ์ดของ parent แบบอัตโนมัติ ข้อความจำกัด 2,000 ตัวอักษรต่อเลน และ 4,000 ตัวอักษรทั้งบล็อก เลนที่ใส่ไม่ได้จะถูกระบุชื่อ ไม่ใช่ถูกตัดทิ้งเงียบๆ</p>
       </div>
     </div>
     <div class="footer">แหล่งข้อมูล: lib/kanban-extension.ts · docs/agents/kanban.md · PIWEB-50</div>
