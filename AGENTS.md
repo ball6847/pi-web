@@ -12,7 +12,7 @@ Typecheck: `node_modules/.bin/tsc --noEmit` · Lint: `npm run lint`
 
 ### Before creating a PR
 
-`origin` is my fork (`ball6847/pi-web`), `upstream` is `agegr/pi-web`. The lane rule wants a PR **inside my fork** (`--repo ball6847/pi-web --base kanban`). Open one only after checking which remote the base branch lives on: `gh api repos/<owner>/<repo>/branches/kanban --jq .commit.sha` returns 404 for a branch that does not exist there.
+Never touch `agegr/pi-web` at all — no fetch, no API call, no PR lookup, no push. All work stays in the fork (`origin`, `ball6847/pi-web`). The lane rule wants a PR **inside my fork** (`--repo ball6847/pi-web --base kanban`).
 
 Never force-push a shared integration branch to make a PR possible. Put the change on a topic branch and let the PR own the branch diff.
 
@@ -164,6 +164,7 @@ Location: `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
 
 ## Session lessons
 
+- **Any pi-web work**: never touch `agegr/pi-web`, even read-only. Why: the user forbids it outright.
 - **A kanban card can vanish mid-run**: another session may delete it, so re-read the card before each lane move. Why: the update then refuses with "Card not found".
 
 ## CSS Variables (`app/globals.css`)
