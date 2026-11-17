@@ -506,6 +506,18 @@ export const KANBAN_NOTICE_TEMPLATE_DEFAULT =
   + "and move it with kanban update (no cardId) as soon as it stops matching — one lane at a time as the work advances, "
   + "never straight to the last lane.";
 
+/**
+ * The line a delegated session gets. Its caller's card is not its own, so the
+ * owner's line is wrong twice over: it says "this session is on card" about
+ * someone else's card, and it says to move it with no cardId — which for a child
+ * names nothing. A fixed line, never the board's template: the template is the
+ * owner's wording for the owner's facts.
+ */
+export const KANBAN_DELEGATED_NOTICE_TEMPLATE =
+  "Kanban: you are working on card {cardKey} in {lane} ({laneId}), delegated by the session that owns it. "
+  + "Comment with kanban comment, and move it with kanban update passing cardId \"{cardKey}\" — one lane at a time, "
+  + "forward only. Leave its title and description to its owner.";
+
 /** A board's notice, with the defaults a board that never stored one reads as. */
 export function kanbanBoardNotice(board: Pick<KanbanBoard, "notice">): KanbanBoardNotice {
   return { template: board.notice?.template ?? "", reminderTurns: board.notice?.reminderTurns ?? 0 };

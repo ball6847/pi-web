@@ -1,6 +1,7 @@
 import type { ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
-import { cardForSession, kanbanBoardNotice, kanbanNoticeValues, renderKanbanNoticeTemplate } from "./kanban-shared";
+import { cardForSession, kanbanBoardNotice, KANBAN_DELEGATED_NOTICE_TEMPLATE, kanbanNoticeValues, renderKanbanNoticeTemplate } from "./kanban-shared";
 import { executeKanbanToolRequest, readBoard } from "./kanban-store";
+import { readSessionDelegatedFrom } from "./session-reader";
 import { parseKanbanToolRequest, type KanbanToolResult } from "./kanban-tool-domain";
 import { KanbanToolOutputSchema, KanbanToolParameters } from "./kanban-tool-schema";
 import { isReadOnlySelection } from "./mcp-read-only-policy";
@@ -243,6 +244,7 @@ function toolResult(result: KanbanToolResult) {
  * turn count — start again for the model that lost it.
  */
 type NoticeMemory = Map<string, { state: KanbanNoticeState; seenAt: number; turns: number }>;
+type NoticeMemoryValue = { state: KanbanNoticeState; seenAt: number; turns: number };
 
 /**
  * The current context — what the model actually sees — not the whole append-only
@@ -292,19 +294,43 @@ const sameState = (a: KanbanNoticeState | undefined, b: KanbanNoticeState): bool
  * starts counting again — the transcript still holds the last notice, and the
  * reminder is a nudge, not a rule.
  */
-async function cardNoticeForRun(ctx: ExtensionContext, memory: NoticeMemory) {
+async function cardNoticeForRun(ctx: ExtensionContext, memory: NoticeMemory, delegatedCard: boolean) {
+  return noticeForSession(ctx, memory, delegatedCard);
+}
+
+/**
+ * The session's own card, or one this session was explicitly delegated: never
+ * the caller's card by inheritance. The store checks that `delegatedFrom` is
+ * the real caller before a child can act on a card it does not own.
+ */
+async function noticeCard(snapshot: Awaited<ReturnType<typeof readBoard>>, sessionId: string): Promise<{ card: KanbanCard | null; delegated: boolean }> {
+  if (!snapshot.ok) return { card: null, delegated: false };
+  const own = cardForSession(snapshot.board, sessionId);
+  if (own) return { card: own, delegated: false };
+  const delegatedFrom = await readSessionDelegatedFrom(sessionId);
+  if (!delegatedFrom) return { card: null, delegated: false };
+  const delegated = cardForSession(snapshot.board, delegatedFrom);
+  return { card: delegated, delegated: delegated !== null };
+}
+
+async function noticeForSession(
+  ctx: ExtensionContext,
+  memory: NoticeMemory,
+  delegatedCard: boolean,
+) {
   const snapshot = await readBoard(ctx.cwd, { create: false });
   if (!snapshot.ok) return undefined;
   const sessionId = ctx.sessionManager.getSessionId();
   const context = contextEntries(ctx);
   const prior = priorState(ctx, memory, sessionId, context);
-  const own = cardForSession(snapshot.board, sessionId) ?? null;
-  // Only this session's OWN card counts. A subagent spawned with the Agent tool
-  // holds no link, and inheriting its caller's card would hand it another
-  // session's lane instructions and its standing update rule.
-  const card = own;
+  const resolved = delegatedCard
+    ? await noticeCard(snapshot, sessionId)
+    : { card: snapshot.ok ? cardForSession(snapshot.board, sessionId) : null, delegated: false };
+  const card = resolved.card;
   const boardNotice = kanbanBoardNotice(snapshot.board);
-  const lineTemplate = boardNotice.template;
+  // An owner-facing line is wrong for a delegated child: it names the wrong
+  // owner and tells the child to move a card by a cardId-less update.
+  const lineTemplate = resolved.delegated ? KANBAN_DELEGATED_NOTICE_TEMPLATE : boardNotice.template;
   const textSignature = kanbanTemplateSignature(lineTemplate);
   // A session with no card does not care about the board: nothing is injected
   // for it — not even the lane ids — so a plain session runs kanban-free until
@@ -375,11 +401,16 @@ async function cardNoticeForRun(ctx: ExtensionContext, memory: NoticeMemory) {
 
 export interface KanbanNoticeOptions {
   /**
-   * Decides per turn whether this session may be injected into at all. A
-   * subagent spawned with the Agent tool has no board link of its own, and a
-   * caller's card must never become its lane instructions.
+   * Decides per turn whether this session may be injected into at all. Card
+   * resolution still never inherits a caller's card by accident.
    */
   enabled?: (ctx: ExtensionContext) => boolean | Promise<boolean>;
+  /**
+   * Whether a delegated session may hear the runway of the card it was told to
+   * work on. The store still verifies the actual delegation before allowing it
+   * to act; this only chooses what the notice resolves.
+   */
+  delegatedCard?: boolean;
   /** Normal sessions use the live persisted pin; children supply their snapshot/profile policy. */
   isReadOnly?: (ctx: ExtensionContext) => boolean;
 }
@@ -388,16 +419,26 @@ export interface KanbanNoticeOptions {
 export function createKanbanExtension(options?: KanbanNoticeOptions): InlineExtension {
   const isReadOnly = options?.isReadOnly ?? normalSessionIsReadOnly;
   const notices: NoticeMemory = new Map();
+  const delegatedCard = options?.delegatedCard === true;
   return {
     name: KANBAN_EXTENSION_NAME,
     hidden: true,
     factory: (pi) => {
+      const sendNotice = (ctx: ExtensionContext, message: { message: { content: string; details: KanbanNoticeState } }) => {
+        if (!message.message.content) return;
+        pi.sendMessage({
+          customType: KANBAN_CARD_NOTICE_TYPE,
+          content: message.message.content,
+          display: false,
+          details: message.message.details,
+        }, ctx.isIdle() ? { triggerTurn: true } : { deliverAs: "steer" });
+      };
       pi.on("before_agent_start", async (_event, ctx) => {
         try {
           // Never for a session with no card of its own: the notices are about
           // the card THIS session owns, and its lane's way of working.
           if (options?.enabled && !(await options.enabled(ctx))) return undefined;
-          return await cardNoticeForRun(ctx, notices);
+          return await cardNoticeForRun(ctx, notices, delegatedCard);
         } catch {
           // Never let the notice grow into a failed prompt.
           return undefined;
@@ -434,14 +475,18 @@ export function createKanbanExtension(options?: KanbanNoticeOptions): InlineExte
             sessionId,
             sessionTitle: ctx.sessionManager.getSessionName() ?? sessionId,
           }, parsed.request, signal);
-          // The model just saw this card in the result; do not repeat it next run.
+          // A claim or lane change is news now, not at the next user turn: a long
+          // autonomous run must hear its runway before it keeps working.
           if (result.ok && (result.action === "create" || result.action === "update") && result.card.sessionId === sessionId) {
-            // Only the card half is known here, and a card edit says nothing about the
-            // board's lanes. Without an earlier notice there is no lane half to keep, so
-            // leave the memory alone: the next run announces lanes and card together.
             const context = contextEntries(ctx);
             const prior = priorState(ctx, notices, sessionId, context);
-            if (prior !== undefined) notices.set(sessionId, { state: { ...prior, card: kanbanCardSignature(result.card) }, seenAt: context.length, turns: 0 });
+            const next: NoticeMemoryValue | undefined = prior === undefined
+              ? undefined
+              : { state: { ...prior, card: kanbanCardSignature(result.card) }, seenAt: context.length, turns: 0 };
+            if (next) notices.set(sessionId, next);
+            const message = await noticeForSession(ctx, notices, delegatedCard);
+            if (message?.message.content) sendNotice(ctx, message);
+            else if (next) notices.set(sessionId, next);
           }
           return toolResult(result);
         },

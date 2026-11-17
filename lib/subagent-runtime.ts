@@ -524,7 +524,7 @@ export function createSubagentController(
         // Filter to built-ins: Kanban must not turn an empty/extension-only profile read-only.
         ...(!chatOnly ? [createKanbanExtension({
           isReadOnly: () => isReadOnlySelection(toolScope.tools.filter((name) => SDK_BUILTIN_TOOLS.includes(name))),
-          enabled: () => false,
+          delegatedCard: true,
         })] : []),
         ...(codemodeExtension ? [codemodeExtension] : []),
         ...(mcp ? [...mcp.extensions, createSubagentMcpPolicyExtension(() => toolScope)] : []),
