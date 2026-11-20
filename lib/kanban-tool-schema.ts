@@ -5,7 +5,7 @@ import { KANBAN_COMMENT_MAX, KANBAN_SEARCH_DEFAULT_LIMIT, KANBAN_SEARCH_MAX_LIMI
 /** Flat parameters keep provider schemas and the web's argument rows simple. */
 export const KanbanToolParameters = Type.Object({
   action: StringEnum(["read", "search", "create", "update", "comment"] as const),
-  cardId: Type.Optional(Type.String({ minLength: 1, description: "read: one card in full. update: its target; omit for your linked card." })),
+  cardId: Type.Optional(Type.String({ minLength: 1, description: "read: one card in full. comment: any card on this board. update: your card or an unlinked card; omit for your linked card." })),
   query: Type.Optional(Type.String({ description: "search: literal text, matched against title or description. Empty lists the first cards." })),
   laneId: Type.Optional(Type.String({ minLength: 1, description: "search: only this lane. create/update: the target lane (a work lane claims the card for this session)." })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: KANBAN_SEARCH_MAX_LIMIT, description: `search: most rows returned (default ${KANBAN_SEARCH_DEFAULT_LIMIT}).` })),
@@ -14,7 +14,7 @@ export const KanbanToolParameters = Type.Object({
   body: Type.Optional(Type.String({
     minLength: 1,
     maxLength: KANBAN_COMMENT_MAX,
-    description: "comment only: the note itself (Markdown). Write handoffs, decisions and blockers here as the work moves.",
+    description: "comment only: the note itself (Markdown). Any session may comment on any card; each note names its source session.",
   })),
 }, { additionalProperties: false });
 

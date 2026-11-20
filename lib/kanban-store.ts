@@ -37,7 +37,7 @@ import {
 } from "./kanban-shared";
 import {
   applyKanbanToolMutation, kanbanToolCommentResult, kanbanToolMutationResult, kanbanToolOverview, kanbanToolRead, kanbanToolSearch,
-  parseKanbanToolRequest, resolveKanbanToolCard,
+  parseKanbanToolRequest, resolveKanbanToolCommentCard,
   type KanbanToolActor, type KanbanToolComment, type KanbanToolResult,
 } from "./kanban-tool-domain";
 import { KANBAN_COMMENT_PAGE_LIMIT } from "./kanban-tool-limits";
@@ -843,7 +843,7 @@ export async function executeKanbanToolRequest(
       // Session files can disappear while waiting for the lock, too.
       if (!(await validateSession(projectRoot, actor.sessionId))) return failure("session-missing", "The executing session no longer exists in this project.");
       if (request.action === "comment") {
-        const target = resolveKanbanToolCard(board, request.cardId, scoped);
+        const target = resolveKanbanToolCommentCard(board, request.cardId, scoped);
         if (!target.ok) return target;
         cardId = target.card.id;
         written = {

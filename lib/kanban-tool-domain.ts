@@ -172,11 +172,10 @@ function cardData(board: KanbanBoard, card: KanbanCard): CardData {
   return { ...card, key: kanbanCardKey(board, card) };
 }
 
-/** The card a mutation acts on: an explicit id, or this session's own linked
- * card. Refused for an unknown card, and for a card another session owns —
- * a link is never stolen, and a foreign card is never edited. An unlinked card
- * is fair game (text edits, a claim, a comment). `cardId` may be the card's id,
- * its key (`PIW-42`) or, within this board, its number.
+/** Mutations act on an explicit id or this session's own linked card. They
+ * refuse unknown cards and cards another session owns. Comments use
+ * `resolveKanbanToolCommentCard`. `cardId` may be the id, key (`PIW-42`) or
+ * number within this board.
  */
 export function resolveKanbanToolCard(
   board: KanbanBoard,
@@ -197,6 +196,24 @@ export function resolveKanbanToolCard(
     return refused(`Card "${kanbanCardKey(board, card)}" belongs to another session. Choose an unlinked card; links cannot be stolen.`);
   }
   return { ok: true, card, delegated };
+}
+
+/** Comments accept any existing card on this board. An omitted `cardId` still
+ * means this session's own card. Returns the card without the `delegated` flag,
+ * which only the mutation guard uses.
+ */
+export function resolveKanbanToolCommentCard(
+  board: KanbanBoard,
+  cardId: string | undefined,
+  actor: KanbanToolActor,
+): { ok: true; card: KanbanCard } | (KanbanToolFailure & { code: "refused" }) {
+  const card = cardId === undefined ? cardForSession(board, actor.sessionId) : resolveKanbanCardRef(board, cardId);
+  if (!card) {
+    return refused(cardId === undefined
+      ? "This session has no linked card. Read the board, then specify cardId to comment on another card."
+      : "Card not found in this project's board. Use its key (like PIW-42), an id from kanban read, or search to discover current cards.");
+  }
+  return { ok: true, card };
 }
 
 /** Pure guarded patch/claim/move. The caller supplies identity/time; never silently drops another link. */
