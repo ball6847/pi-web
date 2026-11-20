@@ -172,11 +172,10 @@ function cardData(board: KanbanBoard, card: KanbanCard): CardData {
   return { ...card, key: kanbanCardKey(board, card) };
 }
 
-/** The card a mutation acts on: an explicit id, or this session's own linked
- * card. Refused for an unknown card, and for a card another session owns.
- * A link is never stolen, and a foreign card is never edited or moved. Only
- * comments use `resolveKanbanToolCommentCard` instead. `cardId` may be the
- * card's id, its key (`PIW-42`) or, within this board, its number.
+/** Mutations act on an explicit id or this session's own linked card. They
+ * refuse unknown cards and cards another session owns. Comments use
+ * `resolveKanbanToolCommentCard`. `cardId` may be the id, key (`PIW-42`) or
+ * number within this board.
  */
 export function resolveKanbanToolCard(
   board: KanbanBoard,
@@ -199,11 +198,9 @@ export function resolveKanbanToolCard(
   return { ok: true, card, delegated };
 }
 
-/** The card a comment acts on: any card in this board, linked or not. The
- * reference still has to name an existing card, and an omitted `cardId` still
- * means this session's own card. Ownership decides who may edit or move a
- * card, not who may leave a note on it. Returns the card alone: `delegated`
- * belongs to the mutation guard, and a comment has no forward-move rule.
+/** Comments accept any existing card on this board. An omitted `cardId` still
+ * means this session's own card. Returns the card without the `delegated` flag,
+ * which only the mutation guard uses.
  */
 export function resolveKanbanToolCommentCard(
   board: KanbanBoard,

@@ -457,7 +457,7 @@ export function createKanbanExtension(options?: KanbanNoticeOptions): InlineExte
           + "update patches title/description/laneId; omitted fields stay unchanged, empty description clears it. Omit cardId to update your linked card. "
           + "An explicit work lane on a free card claims it. Never edit another session's card or claim a second card. Linked cards cannot enter Backlog. "
           + "A card owned by the session that delegated work to you is the one exception: pass its cardId (read prints its key) to comment on it or move it one lane forward; leave its title and description to its owner. "
-          + "comment writes one note to a card's thread (your linked card when cardId is omitted): record the handoff, the decision and what is left, as the work moves. Any session may comment on any card; each note names its source session. "
+          + "comment writes one note to a card's thread (your linked card when cardId is omitted). Any session may comment on any card; each note names its source session. Only the card's session can edit it or move it. "
           + "Use explicit lane IDs from read; same-lane updates do not reorder. Read-only sessions may read and search only. "
           + "Create is not idempotent: do not blindly retry it. For delegation, create a Backlog task and pass its cardId in the existing Agent prompt; this tool launches nothing.",
         parameters: KanbanToolParameters,

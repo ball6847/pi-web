@@ -14,7 +14,7 @@ export const KanbanToolParameters = Type.Object({
   body: Type.Optional(Type.String({
     minLength: 1,
     maxLength: KANBAN_COMMENT_MAX,
-    description: "comment only: the note itself (Markdown). Any session may comment on any card; each note names its source session. Write handoffs, decisions and blockers here as the work moves.",
+    description: "comment only: the note itself (Markdown). Any session may comment on any card; each note names its source session.",
   })),
 }, { additionalProperties: false });
 
