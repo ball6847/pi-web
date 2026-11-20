@@ -7,16 +7,6 @@ import { terminalFontSize, useChatAppearance } from "@/hooks/useChatAppearance";
 import { useI18n } from "@/hooks/useI18n";
 import { setTerminalTheme, useTerminalTheme } from "@/hooks/useTerminalTheme";
 import { subscribeFontPreferences } from "@/hooks/useFontPreferences";
-import {
-  isCloseTabShortcut,
-  isFocusComposerShortcut,
-  isPanelTabNavigationShortcut,
-  isRightPanelFullscreenShortcut,
-  isRightPanelToggleShortcut,
-  isSidebarToggleShortcut,
-  isTerminalToggleShortcut,
-} from "@/hooks/useKeyboardShortcuts";
-import { currentIsMacPlatform } from "@/lib/keyboard-platform";
 import { readFontWeight } from "@/lib/font-preferences";
 import { createTerminalWriter, terminalRequest } from "@/lib/terminal-client";
 import { pageId, trackEventSource } from "@/lib/page-debug";
@@ -39,12 +29,14 @@ interface Props {
   onRestart: () => void;
   onClosed: () => void;
   onCloseError: () => void;
-  /**
-   * Called when the shell itself is gone (it exited, or the server closed it).
-   * The tab goes with the process: a tab of a shell that is not there any more
-   * is a dead tab.
-   */
+  /** The shell exited on its own: the tab closes itself. */
   onProcessExit?: () => void;
+}
+
+function shouldAutofocusTerminal() {
+  // On touch devices, let a real tap focus xterm and open the software keyboard.
+  // Programmatic focus can leave iOS focused without showing its keyboard.
+  return window.matchMedia("(pointer: fine)").matches;
 }
 
 export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError, onProcessExit }: Props) {
@@ -100,6 +92,14 @@ export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError, 
     let connected = false;
     let exited = false;
     let inputFailed = false;
+    // Each connection's first output is history: what the shell printed before this page
+    // connected. xterm answers the questions in it again (cursor position, colours, device
+    // attributes) and the programs that asked have gone, so the shell would take the answers
+    // as typing. Nothing xterm emits is sent while history is being drawn. A shell this panel
+    // just started has had no page yet: it may still be waiting for the answer (fish 4.1+ asks
+    // for the device attributes at startup), so its first output is answered.
+    let awaitingHistory = false;
+    let drawingHistory = 0;
     setStatus("connecting");
     setError(null);
     setExitCode(null);
@@ -131,18 +131,6 @@ export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError, 
       const key = event.key.toLowerCase();
       if ((event.ctrlKey || event.metaKey) && key === "v") return false;
       if ((event.ctrlKey || event.metaKey) && key === "c" && terminal.hasSelection()) return false;
-      // The panel toggles are ours, not the shell's: the global handler acts
-      // on them, so xterm must not send them to the PTY.
-      const isMac = currentIsMacPlatform();
-      if (isSidebarToggleShortcut(event, isMac) || isRightPanelToggleShortcut(event, isMac) || isRightPanelFullscreenShortcut(event, isMac) || isTerminalToggleShortcut(event)) {
-        return false;
-      }
-      // The composer chord is ours too: the shell must not read `Ctrl+L` as
-      // its own "clear the screen" binding.
-      if (isFocusComposerShortcut(event, isMac)) return false;
-      // The tab strip's chords are ours too: the shell must not read `Alt+W`
-      // as its own "delete the word" binding.
-      if (isCloseTabShortcut(event) || isPanelTabNavigationShortcut(event)) return false;
       return true;
     });
 
@@ -155,7 +143,7 @@ export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError, 
     });
     writerRef.current = writer;
     const onData = terminal.onData((data) => {
-      if (connected && !exited && !inputFailed) writer.write(applyTerminalModifiers(data, consumeModifiers()));
+      if (connected && !exited && !inputFailed && !drawingHistory) writer.write(applyTerminalModifiers(data, consumeModifiers()));
     });
     const fitAndResize = () => {
       if (!container.offsetWidth || !container.offsetHeight) return;
@@ -187,9 +175,16 @@ export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError, 
       events.onmessage = (message) => {
         const event = JSON.parse(message.data) as TerminalEvent;
         if (event.type === "output") {
+          const history = awaitingHistory;
+          awaitingHistory = false;
           if (event.reset) terminal.reset();
           else if (offset !== undefined && event.offset <= offset) return;
-          terminal.write(event.data);
+          if (history && event.data) {
+            drawingHistory += 1;
+            terminal.write(event.data, () => { drawingHistory -= 1; });
+          } else {
+            terminal.write(event.data);
+          }
           offset = event.offset;
         } else {
           exited = true;
@@ -205,13 +200,15 @@ export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError, 
         }
       };
       events.onopen = () => {
+        // Also runs when the browser reconnects the stream by itself.
+        awaitingHistory = restored || reconnectKey > 0 || offset !== undefined;
         connected = true;
         if (inputFailed) return;
         terminal.options.disableStdin = false;
         setStatus("ready");
         fitAndResize();
         writer.resize(Math.max(2, terminal.cols), Math.max(2, terminal.rows));
-        if (container.offsetWidth && container.offsetHeight) terminal.focus();
+        if (shouldAutofocusTerminal() && container.offsetWidth && container.offsetHeight) terminal.focus();
       };
       events.onerror = () => {
         if (disposed || exited) return;
@@ -282,7 +279,7 @@ export function TerminalPanel({ tab, active, onRestart, onClosed, onCloseError, 
   }, [fontSize]);
 
   useEffect(() => {
-    if (active) terminalRef.current?.focus();
+    if (active && shouldAutofocusTerminal()) terminalRef.current?.focus();
   }, [active]);
 
   useEffect(() => {
