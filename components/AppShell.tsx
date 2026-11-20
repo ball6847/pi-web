@@ -74,7 +74,7 @@ import type { DebugClientSession } from "@/lib/debug-types";
 import { boardViewUrl, getInitialNavigation, linkedSessionId, withTabOpen, withoutBoardView } from "@/lib/initial-navigation";
 import { clearTabOpenSession, getTabOpen, setTabOpenNewSession, setTabOpenSession } from "@/lib/tab-session";
 import { mergeCatalogRow } from "./session-catalog-helpers";
-import { getDraft, parkedNewSessionDraftKey, rekeyDraft, setDraft } from "@/lib/draft-store";
+import { clearDraft, getDraft, parkedNewSessionDraftKey, rekeyDraft, setDraft } from "@/lib/draft-store";
 import {
   contextForCwd,
   type NewSessionContext,
@@ -1468,7 +1468,15 @@ export function AppShell() {
     if (toolEndRefreshTimerRef.current) clearTimeout(toolEndRefreshTimerRef.current);
   }, []);
 
-  const handleSessionForked = useCallback((newSessionId: string) => {
+  const handleSessionForked = useCallback((newSessionId: string, session?: SessionInfo) => {
+    if (session) {
+      // A fork into another folder is another project's session: opened as a
+      // pick from the list, so the shell adopts its project before the sidebar
+      // reports the new cwd (which would otherwise close it as stale).
+      setRefreshKey((k) => k + 1);
+      handleSelectSession(session);
+      return;
+    }
     invalidateWorkspaceRestore();
     activeNewSessionDraftKeyRef.current = null;
     setRefreshKey((k) => k + 1);
@@ -1481,7 +1489,7 @@ export function AppShell() {
     }));
     hydrateSelectedSession(newSessionId);
     router.replace(`?session=${encodeURIComponent(newSessionId)}`, { scroll: false });
-  }, [invalidateWorkspaceRestore, router, hydrateSelectedSession]);
+  }, [handleSelectSession, invalidateWorkspaceRestore, router, hydrateSelectedSession]);
 
   // The sidebar calls this when the initial session is not in its list.
   const handleInitialRestoreDone = useCallback(() => {
@@ -1782,6 +1790,7 @@ export function AppShell() {
   const handleDeleteSideChat = useCallback(async (sessionId: string, root: SessionInfo): Promise<string | null> => {
     const result = await deleteSideChat(sessionId);
     if (result) return result.error;
+    clearDraft(sessionId);
     handleCloseFileTab(`agent:${sessionId}`);
     if (selectedSessionRef.current?.id === sessionId) {
       handleSelectSession(root);
@@ -3825,9 +3834,9 @@ export function AppShell() {
                 const child = sessionsWithSelection.find((session) => session.id === sessionId);
                 handleOpenSubagentTab(sessionId, child ? sessionDisplayTitle(child) : sessionId);
               }}
-              onSessionForked={(newSessionId) => {
+              onSessionForked={(newSessionId, session) => {
                 if (isMobile) setRightPanelOpen(false);
-                handleSessionForked(newSessionId);
+                handleSessionForked(newSessionId, session);
               }}
               onOpenSettings={openSettingsSection}
               onToolEnd={handleToolEnd}
