@@ -32,6 +32,7 @@ import {
 } from "@/lib/kanban";
 import { canRestInLane } from "@/lib/kanban-shared";
 import { kanbanSessionOptions } from "@/lib/kanban-sessions";
+import { isPlainActivation, sessionDeepLink } from "@/lib/session-links";
 import { kanbanCardKey, type KanbanActivity, type KanbanActivityKind, type KanbanCard } from "@/lib/kanban-types";
 import type { SessionInfo } from "@/lib/types";
 import type { KanbanComment } from "@/lib/kanban-types";
@@ -167,14 +168,20 @@ function TrashIcon() {
 
 function CommentEntry({
   comment,
+  sessions,
+  onOpenSession,
   onDelete,
 }: {
   comment: KanbanComment;
+  sessions: SessionInfo[];
+  onOpenSession(sessionId: string, title: string): void;
   onDelete(commentId: string): void;
 }) {
   const { t } = useI18n();
   const agent = comment.author === "agent";
   const who = agent ? comment.sessionTitle || t("kanban.detailCommentAgent") : t("kanban.detailCommentYou");
+  const source = agent && comment.sessionId && sessions.find((session) => session.id === comment.sessionId);
+  const openSessionLabel = t("kanban.detailOpenSession");
   return (
     <li
       data-kanban-comment={comment.id}
@@ -199,9 +206,31 @@ function CommentEntry({
             background: agent ? "var(--accent)" : "var(--text-dim)",
           }}
         />
-        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {who}
-        </span>
+        {source ? (
+          <a
+            data-kanban-comment-session={source.id}
+            href={sessionDeepLink(source.id)}
+            title={openSessionLabel}
+            aria-label={`${openSessionLabel} ${who}`}
+            onClick={(event) => {
+              if (!isPlainActivation(event)) return;
+              event.preventDefault();
+              onOpenSession(source.id, who);
+            }}
+            style={{ fontSize: 11, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          >
+            {who}
+          </a>
+        ) : (
+          <span
+            data-kanban-comment-session={comment.sessionId ?? undefined}
+            style={{ fontSize: 11, fontWeight: agent ? 600 : undefined, color: agent ? "var(--text-muted)" : "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          >
+            {agent && comment.sessionId
+              ? `${comment.sessionTitle ? `${comment.sessionTitle} · ` : ""}${comment.sessionId} · ${t("kanban.detailCommentAgent")}`
+              : who}
+          </span>
+        )}
         <span style={{ fontSize: 10.5, color: "var(--text-dim)", flexShrink: 0 }}>
           {relativeTime(comment.createdAt)}
         </span>
@@ -1004,6 +1033,8 @@ export function KanbanCardDetail(props: KanbanCardDetailProps) {
                       <CommentEntry
                         key={item.key}
                         comment={item.comment}
+                        sessions={sessions}
+                        onOpenSession={onOpenSession}
                         onDelete={(commentId) => card && kanbanDeleteCardComment(projectDir, card.id, commentId)}
                       />
                     ) : (

@@ -173,10 +173,10 @@ function cardData(board: KanbanBoard, card: KanbanCard): CardData {
 }
 
 /** The card a mutation acts on: an explicit id, or this session's own linked
- * card. Refused for an unknown card, and for a card another session owns —
- * a link is never stolen, and a foreign card is never edited. An unlinked card
- * is fair game (text edits, a claim, a comment). `cardId` may be the card's id,
- * its key (`PIW-42`) or, within this board, its number.
+ * card. Refused for an unknown card, and for a card another session owns.
+ * A link is never stolen, and a foreign card is never edited or moved. Only
+ * comments use `resolveKanbanToolCommentCard` instead. `cardId` may be the
+ * card's id, its key (`PIW-42`) or, within this board, its number.
  */
 export function resolveKanbanToolCard(
   board: KanbanBoard,
@@ -197,6 +197,26 @@ export function resolveKanbanToolCard(
     return refused(`Card "${kanbanCardKey(board, card)}" belongs to another session. Choose an unlinked card; links cannot be stolen.`);
   }
   return { ok: true, card, delegated };
+}
+
+/** The card a comment acts on: any card in this board, linked or not. The
+ * reference still has to name an existing card, and an omitted `cardId` still
+ * means this session's own card. Ownership decides who may edit or move a
+ * card, not who may leave a note on it. Returns the card alone: `delegated`
+ * belongs to the mutation guard, and a comment has no forward-move rule.
+ */
+export function resolveKanbanToolCommentCard(
+  board: KanbanBoard,
+  cardId: string | undefined,
+  actor: KanbanToolActor,
+): { ok: true; card: KanbanCard } | (KanbanToolFailure & { code: "refused" }) {
+  const card = cardId === undefined ? cardForSession(board, actor.sessionId) : resolveKanbanCardRef(board, cardId);
+  if (!card) {
+    return refused(cardId === undefined
+      ? "This session has no linked card. Read the board, then specify cardId to comment on another card."
+      : "Card not found in this project's board. Use its key (like PIW-42), an id from kanban read, or search to discover current cards.");
+  }
+  return { ok: true, card };
 }
 
 /** Pure guarded patch/claim/move. The caller supplies identity/time; never silently drops another link. */

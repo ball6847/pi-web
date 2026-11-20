@@ -15,6 +15,7 @@ import vm from "node:vm";
 import ts from "typescript";
 import { createJiti } from "jiti";
 import * as hooks from "../hooks/__fixtures__/react-hook-shim.mjs";
+import { isPlainActivation, sessionDeepLink } from "../lib/session-links.ts";
 
 const { canRestInLane } = await createJiti(import.meta.url).import("../lib/kanban-shared.ts");
 const { kanbanSessionOptions } = await createJiti(import.meta.url).import("../lib/kanban-sessions.ts");
@@ -29,7 +30,7 @@ const code = source.statements
   .filter((node) => !ts.isImportDeclaration(node) && !ts.isInterfaceDeclaration(node))
   .map((node) => node.getText(source).replace(/^export /, ""))
   .join("\n");
-const compiled = ts.transpileModule(`${code}\nglobalThis.components = { KanbanCardDetail };`, {
+const compiled = ts.transpileModule(`${code}\nglobalThis.components = { KanbanCardDetail, CommentEntry };`, {
   compilerOptions: { target: ts.ScriptTarget.ESNext, jsx: ts.JsxEmit.React },
 }).outputText;
 
@@ -48,7 +49,7 @@ function setup(options = {}) {
     ...hooks,
     React: { createElement: (type, props, ...children) => ({ type, props: { ...props, children } }), Fragment: "Fragment" },
     // The key plus the interpolation, so a test can name either.
-    useI18n: () => ({ t: (key, params) => (params ? `${key}:${params.lane ?? ""}` : key) }),
+    useI18n: () => ({ t: (key, params) => (params && params.lane !== undefined ? `${key}:${params.lane}` : key) }),
     useKanbanBoard: () => board,
     useKanbanCardComments: () => ({ status: "ready", comments: options.comments ?? [], total: (options.comments ?? []).length }),
     // The activity journal (another feature's route): an empty, ready page.
@@ -56,6 +57,8 @@ function setup(options = {}) {
     kanbanCardKey,
     canRestInLane,
     kanbanSessionOptions,
+    isPlainActivation,
+    sessionDeepLink,
     // The card's key chip (its own file: one click copies the reference).
     KanbanCardKeyChip: "KanbanCardKeyChip",
     MarkdownBody: "MarkdownBody",
@@ -78,6 +81,7 @@ function setup(options = {}) {
   const mounted = [];
   return {
     calls,
+    context,
     render(nextBoard, props = {}) {
       board = nextBoard;
       const view = hooks.renderHook(context.components.KanbanCardDetail, {
@@ -136,6 +140,32 @@ function lanePicker(view) {
 }
 function menu(view) {
   return all(view.result, (node) => node.type === "CardMenu")[0] ?? null;
+}
+
+function agentComment(overrides = {}) {
+  return {
+    id: "comment-1",
+    cardId: "card-1",
+    author: "agent",
+    sessionId: "session-1",
+    sessionTitle: "A session",
+    body: "Handoff note",
+    createdAt: 0,
+    ...overrides,
+  };
+}
+
+function byline(ui, comment, options = {}) {
+  return hooks.renderHook(ui.context.components.CommentEntry, {
+    comment,
+    sessions: options.sessions ?? [session],
+    onOpenSession: options.onOpenSession ?? noop,
+    onDelete: noop,
+  });
+}
+
+function sessionLink(view) {
+  return all(view.result, (node) => node.type === "a")[0] ?? null;
 }
 /** A press on a chip picker: the menu opens over the control's box. */
 const press = { currentTarget: { getBoundingClientRect: () => ({ x: 10, y: 10, width: 80, height: 20, top: 10, left: 10, right: 90, bottom: 30 }) } };
@@ -257,11 +287,64 @@ test("the preview keeps the card's own line breaks, as the writer laid them out"
   assert.equal(preview.props.cwd, "/project", "local file links still resolve against the project");
 });
 
+test("an agent note links its visible source session and opens it on plain activation", (t) => {
+  const ui = setup();
+  t.after(() => ui.cleanup());
+  const opened = [];
+  const view = byline(ui, agentComment(), { onOpenSession: (...args) => opened.push(args) });
+  t.after(() => view.unmount());
+
+  const link = sessionLink(view);
+  assert.ok(link, "an agent note's byline is a real link");
+  assert.equal(link.props.href, "?session=session-1", "the href carries only the session id");
+  assert.equal(link.props.title, "kanban.detailOpenSession");
+  assert.equal(link.props["aria-label"], "kanban.detailOpenSession A session", "the accessible name names the session the link opens");
+  assert.deepEqual(link.props.children, ["A session"], "the stored session title is the link text");
+
+  link.props.onClick({ button: 1, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, defaultPrevented: false });
+  assert.deepEqual(opened, [], "a middle click stays the browser's");
+  link.props.onClick({ button: 0, ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, defaultPrevented: false });
+  assert.deepEqual(opened, [], "a modified click stays the browser's");
+
+  let prevented = false;
+  link.props.onClick({ button: 0, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, defaultPrevented: false, preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, true, "a plain click stays in this page");
+  assert.deepEqual(opened, [["session-1", "A session"]]);
+});
+
+test("a missing source session is plain muted text with the stored id", (t) => {
+  const ui = setup();
+  t.after(() => ui.cleanup());
+  const view = byline(ui, agentComment({ sessionId: "gone", sessionTitle: "Old session" }), { sessions: [] });
+  t.after(() => view.unmount());
+
+  assert.equal(sessionLink(view), null, "no link to a session that is gone");
+  const bylineText = all(view.result, (node) => node.type === "span" && Array.isArray(node.props.children) && node.props.children[0]?.includes("Old session"));
+  assert.equal(bylineText.length, 1);
+  assert.deepEqual(bylineText[0].props.children, ["Old session · gone · kanban.detailCommentAgent"]);
+  assert.equal(bylineText[0].props.style.color, "var(--text-muted)");
+  view.unmount();
+
+  const noTitle = byline(ui, agentComment({ sessionTitle: null }), { sessions: [] });
+  const noTitleText = all(noTitle.result, (node) => node.type === "span" && Array.isArray(node.props.children) && node.props.children[0]?.includes("session-1"))[0];
+  assert.deepEqual(noTitleText.props.children, ["session-1 · kanban.detailCommentAgent"], "with no stored name the id still names the writer");
+  noTitle.unmount();
+});
+
+test("a browser note stays plain You with no session link", (t) => {
+  const ui = setup();
+  t.after(() => ui.cleanup());
+  const view = byline(ui, agentComment({ author: "user", sessionId: null, sessionTitle: null }), { sessions: [] });
+  t.after(() => view.unmount());
+
+  assert.equal(sessionLink(view), null);
+  assert.ok(all(view.result, (node) => node.type === "span" && node.props.children?.[0] === "kanban.detailCommentYou")[0]);
+  assert.equal(all(view.result, (node) => node.type === "button" && node.props.title === "kanban.detailCommentDelete").length, 1, "a browser note keeps its delete button");
+});
+
 test("every authored body in the tab keeps its line breaks, notes included", () => {
-  // A note is written by a person or an agent in the same editor the card is;
-  // `CommentEntry` renders inside its own component, so the tree walk above
-  // cannot reach it — the file itself is the check: no `<MarkdownBody` here may
-  // opt out of `keepLineBreaks` (the typeset reading is for generated prose).
+  // The note component is reachable in the VM now; this still checks the source
+  // so every preview in the file stays consistent.
   const bodies = text.match(/<MarkdownBody[^>]*>/g) ?? [];
   assert.ok(bodies.length >= 2, "the description preview and a note's body");
   for (const body of bodies) assert.match(body, /keepLineBreaks/, `typeset rendering in a detail tab: ${body}`);
